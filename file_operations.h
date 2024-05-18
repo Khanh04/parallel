@@ -3,6 +3,9 @@
 
 #include "common.h"
 #include "functions.h"
+#include "lexer.h"
+
+class Functions; // Forward declaration
 
 extern int numOpenedBrackets;
 

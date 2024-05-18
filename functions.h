@@ -3,6 +3,8 @@
 
 #include "common.h"
 #include "file_operations.h"
+#include "lexer.h"
+#include "parser.h"
 
 #include <string>
 #include <vector>

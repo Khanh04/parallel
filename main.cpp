@@ -1,3 +1,32 @@
+using namespace std;
+
+#define VERBOSE 0
+#define PARALLELIZE 0 // parse the input file, and produce the parallel equivalent
+
+// TODO: Delete following? Decide what to do with data of this type:
+// Dependency graph constants are not used at the moment:
+#define CONSTANT 0
+#define SCALAR 1
+#define ARRAY 2
+#define POINTER 3
+
+#define MAX_FUNCTIONS 100
+
+#include <iostream>
+#include <vector>
+#include <set> // For checking overlapping or LHS and RHS variables in a loop
+#include <fstream>
+#include <string>
+#include <regex>
+#include <algorithm>
+#include <iostream>
+#include <sstream>
+#include <map>
+#include <cctype>
+#include <cmath>
+#include <simd/math.h>
+
+
 #include "common.h"
 #include "parser.h"
 #include "utils.h"

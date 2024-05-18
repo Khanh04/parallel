@@ -3,6 +3,7 @@
 #include "functions.h"
 #include "dependency_graph.h"
 #include "utils.h"
+#include "lexer.h"
 #include <sstream>
 #include <regex>
 
