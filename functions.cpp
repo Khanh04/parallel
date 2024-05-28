@@ -199,52 +199,88 @@ void parseFunctionOrVariableDefinition(Functions &f, std::string &functionName, 
     std::istringstream ist{fileLine};
     Lexer* p_lexer = new Lexer{ist};
     std::string type = p_lexer->get_token_text();
+    std::cout << "Type: " << type << std::endl;
     p_lexer->advance();
-    std::string name = p_lexer->get_token_text();
-    p_lexer->advance();
-    std::string word = p_lexer->get_token_text();
 
-    if ((word == ",") || (word == ";")) {
-        if (parallelize) {
-            fOut << fileLine << endl;
+    bool isFunction = false;
+    bool isVariable = false;
+    bool firstVar = true;
+    std::ostringstream varStream;
+
+    while (true) {
+        std::string name = p_lexer->get_token_text();
+        std::cout << "Name: " << name << std::endl;
+        p_lexer->advance();
+        std::string word = p_lexer->get_token_text();
+        std::cout << "Word: " << word << std::endl;
+
+        if (word == "(") {
+            isFunction = true;
+            functionName = name;
+            break;
+        } else if (word == "=" || word == "," || word == ";") {
+            isVariable = true;
+            if (parallelize) {
+                if (firstVar) {
+                    varStream << type << " " << name;
+                    firstVar = false;
+                } else {
+                    varStream << ", " << name;
+                }
+                if (word == "=") {
+                    p_lexer->advance();
+                    std::string value = p_lexer->get_token_text();
+                    varStream << " = " << value;
+                    p_lexer->advance();
+                    word = p_lexer->get_token_text();
+                }
+                if (word == ";") {
+                    varStream << word;
+                    if (word == ";") {
+                        break;
+                    }
+                }
+            }
+        } else {
+            if (parallelize) {
+                varStream << type << " " << name << word;
+            }
+            break;
         }
+        p_lexer->advance();
+    }
+
+    if (parallelize && isVariable) {
+        fOut << varStream.str() << std::endl;
         return;
     }
 
-    if (word == "=") {
+    if (isFunction) {
+        f.addFunction(functionName);
+        Functions::currentFunction = functionName;
+
+        Graph newGraph;
+        Graph::graphs.push_back(newGraph);
+        Graph::iCurrentGraph = Graph::graphs.size() - 1;
+
+        Variables newVariables;
+        Variables::varSet.push_back(newVariables);
+        Variables::iCurrentVarSet = Variables::varSet.size() - 1;
+
         if (parallelize) {
-            fOut << fileLine << endl;
-            return;
-        }
-    } else if (word != "(") {
-        if (parallelize) {
-            fOut << fileLine << endl;
-        }
-        return;
-    }
-
-    f.addFunction(name);
-    Functions::currentFunction = name;
-
-    Graph newGraph;
-    Graph::graphs.push_back(newGraph);
-    Graph::iCurrentGraph = Graph::graphs.size()-1;
-
-    Variables newVariables;
-    Variables::varSet.push_back(newVariables);
-    Variables::iCurrentVarSet = Variables::varSet.size()-1;
-
-    if (parallelize) {
-        fOut << fileLine << endl;
-        if (name == "main") {
-            fOut << "\n\
+            fOut << fileLine << std::endl;
+            if (functionName == "main") {
+                fOut << "\n\
     int rank, nRanks;\n\
     MPI_Init(NULL, NULL);\n\
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);\n\
     MPI_Comm_size(MPI_COMM_WORLD, &nRanks);\n\
     ";
+            }
         }
     }
+
+    delete p_lexer;
 }
 
 void parseExpression(std::ofstream &fOut, std::string fileLine, const int maxStatementId) {

@@ -1,5 +1,3 @@
-using namespace std;
-
 // TODO: Delete following? Decide what to do with data of this type:
 // Dependency graph constants are not used at the moment:
 #define CONSTANT 0
