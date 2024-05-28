@@ -47,19 +47,19 @@ void parseInputFileLine(std::ifstream &fIn, std::ofstream &fOut,
                         std::string &fileLine, int &maxStatementId,
                         bool &inMain, int parallelize) {
     // Skip empty lines:
-    if (fileLine == "")
+    if (fileLine.empty())
         return;
-        
+
     // When { is detected, increase the number of open brackets
-    // When } is detected, reduce number of open brackets,
+    // When } is detected, reduce the number of open brackets,
     // and act if the function is main:
     updateOpenedBrackets(fileLine);
 
     // Increase global statement ID,
-    // so that the dependencies formed in this line are associated a new ID:
+    // so that the dependencies formed in this line are associated with a new ID:
     maxStatementId++;
 
-    // Get first word in order to determine
+    // Get the first word in order to determine
     // whether a loop starts in this line:
     std::cout << std::endl << "#" << maxStatementId << ": " << fileLine << ". Parsing..." << std::endl;
 
@@ -79,15 +79,19 @@ void parseInputFileLine(std::ifstream &fIn, std::ofstream &fOut,
         parseLoop(fileLine, maxStatementId, loopMin, loopMax, p_lexer, fIn, fOut, parallelize);
     } else if (word == "while") {
         parseWhile(word, p_lexer);
-    } else if (fileLine.find("=") == std::string::npos) {
-        std::cout << "Skipping line " << fileLine << std::endl;
-        if (parallelize) {
-            // Copy the line from input file into the output file
-            fOut << fileLine << std::endl;
+    } else {
+        // Check if it's a function call or an expression
+        if (fileLine.find("(") != std::string::npos && fileLine.find(")") != std::string::npos) {
+            bool isFunction = parseFunctionCall(f, fOut, fileLine, maxStatementId);
+            if (!isFunction) {
+                parseExpression(fOut, fileLine, maxStatementId);
+            }
+        } else {
+            std::cout << "Skipping line " << fileLine << std::endl;
+            if (parallelize) {
+                // Copy the line from the input file into the output file
+                fOut << fileLine << std::endl;
+            }
         }
-    } else { // Expression or function:
-        bool isFunction = parseFunctionCall(f, fOut, fileLine, maxStatementId);
-        if (!isFunction)
-            parseExpression(fOut, fileLine, maxStatementId);
-    } // if "for" loop, or ..., or an expression
+    }
 }

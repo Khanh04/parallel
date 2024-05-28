@@ -1,8 +1,8 @@
 #ifndef COMMON_H
 #define COMMON_H
 
-#define VERBOSE 0
-#define PARALLELIZE 0 // parse the input file, and produce the parallel equivalent
+#define VERBOSE 1
+#define PARALLELIZE 1 // parse the input file, and produce the parallel equivalent
 #define MAX_FUNCTIONS 100
 
 // Include standard headers

@@ -1,16 +1,11 @@
 using namespace std;
 
-#define VERBOSE 0
-#define PARALLELIZE 0 // parse the input file, and produce the parallel equivalent
-
 // TODO: Delete following? Decide what to do with data of this type:
 // Dependency graph constants are not used at the moment:
 #define CONSTANT 0
 #define SCALAR 1
 #define ARRAY 2
 #define POINTER 3
-
-#define MAX_FUNCTIONS 100
 
 #include <iostream>
 #include <vector>

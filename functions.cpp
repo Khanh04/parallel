@@ -112,11 +112,39 @@ bool parseFunctionCall(Functions &f, std::ofstream &fOut, std::string fileLine, 
             }
             isFunction = true;
         }
+    } else if (word == "(") {
+        f.addCall(returnVariable); // in this case, returnVariable is the function name
+        p_lexer->advance();
+        word = p_lexer->get_token_text();
+        while (word != ")") {
+            sPushParameters += "    PUSH(" + word + ");\n";
+            sPopParameters += "    POP(" + word + ");\n";
+
+            if (std::find(dependsOnList.begin(), dependsOnList.end(), word) == dependsOnList.end()) {
+                dependsOnList.push_back(word);
+            }
+
+            p_lexer->advance();
+            word = p_lexer->get_token_text();
+            if (word != ")") {
+                if (word != ",") {
+                    word = ")";
+                    return false;
+                } else {
+                    p_lexer->advance();
+                    word = p_lexer->get_token_text();
+                }
+            }
+        }
+        isFunction = true;
     }
+
     if (!isFunction)
         return false;
 
-    updateGraph(maxStatementId, returnVariable, dependsOnList);
+    if (!returnVariable.empty() && returnVariable != "=") {
+        updateGraph(maxStatementId, returnVariable, dependsOnList);
+    }
 
     // Write a parallel version of a for loop to the testPar.cpp:
     fOut << endl;
@@ -144,16 +172,20 @@ bool parseFunctionCall(Functions &f, std::ofstream &fOut, std::string fileLine, 
     fOut << endl;
     fOut << "if(rank == tempRank){" << endl;
     fOut << "    " << fileLine << endl;
-    fOut << "    char* array = (char *) malloc(MAX_BYTES);" << endl;
-    fOut << "    int nArray = 0;" << endl;
-    fOut << "    PUSH(" << returnVariable << ");" << endl;
-    fOut << "    MPI_Send(array, nArray, MPI_CHAR, 0, 0, MPI_COMM_WORLD);" << endl;
+    if (!returnVariable.empty() && returnVariable != "=") {
+        fOut << "    char* array = (char *) malloc(MAX_BYTES);" << endl;
+        fOut << "    int nArray = 0;" << endl;
+        fOut << "    PUSH(" << returnVariable << ");" << endl;
+        fOut << "    MPI_Send(array, nArray, MPI_CHAR, 0, 0, MPI_COMM_WORLD);" << endl;
+    }
     fOut << "}else{" << endl;
     fOut << "    if(!rank){" << endl;
-    fOut << "        char* array = (char *) malloc(MAX_BYTES);" << endl;
-    fOut << "        int nArray = 0;" << endl;
-    fOut << "        MPI_Recv(array, MAX_BYTES, MPI_CHAR, tempRank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);" << endl;
-    fOut << "        POP(" << returnVariable << ");" << endl;
+    if (!returnVariable.empty() && returnVariable != "=") {
+        fOut << "        char* array = (char *) malloc(MAX_BYTES);" << endl;
+        fOut << "        int nArray = 0;" << endl;
+        fOut << "        MPI_Recv(array, MAX_BYTES, MPI_CHAR, tempRank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);" << endl;
+        fOut << "        POP(" << returnVariable << ");" << endl;
+    }
     fOut << "    }" << endl;
     fOut << "}" << endl;
     fOut << endl;
