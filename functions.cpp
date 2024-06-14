@@ -436,9 +436,9 @@ bool checkLoopDependency(int &loopMin, int &loopMax) {
     }
 }
 
-void parseLoop(std::string fileLine, int maxStatementId, int &loopMin, int &loopMax, Lexer* &p_lexer, std::ifstream &fIn, std::ofstream &fOut, int parallelize) {
+void parseForLoop(std::string fileLine, int maxStatementId, int &loopMin, int &loopMax, Lexer* &p_lexer, std::ifstream &fIn, std::ofstream &fOut, int parallelize) {
     std::string word, str, varName, value, varName2, value2, sec3;
-    bool increment = 1;
+    bool increment = true;
 
     word = fileLine;
     word.erase(std::remove_if(word.begin(), word.end(), ::isspace), word.end());
@@ -458,7 +458,7 @@ void parseLoop(std::string fileLine, int maxStatementId, int &loopMin, int &loop
         size = str.find("<");
         str = str.substr(size + 1, str.length());
     } else {
-        increment = 0;
+        increment = false;
         size = str.find(">");
         varName2 = str.substr(0, size);
         size = str.find(">");
@@ -471,18 +471,18 @@ void parseLoop(std::string fileLine, int maxStatementId, int &loopMin, int &loop
     size = str.find(')');
     sec3 = str.substr(0, size);
 
-    if (sec3.find("+"))
-        increment = 1;
+    if (sec3.find("+") != std::string::npos)
+        increment = true;
     else
-        increment = 0;
+        increment = false;
 
     int val1 = stoi(value);
     int val2 = stoi(value2);
-    cout << endl << "For loop (" << varName << " " << val1 << ".." << val2-1 << ") found..." << endl;
+    std::cout << "\nFor loop (" << varName << " " << val1 << ".." << val2-1 << ") found...\n";
 
     getline(fIn, fileLine);
     std::string toParse = fileLine;
-    std::vector <std::string> myvector;
+    std::vector<std::string> myvector;
     while (toParse.find('}') == std::string::npos) {
         myvector.push_back(toParse);
         getline(fIn, fileLine);
@@ -491,26 +491,20 @@ void parseLoop(std::string fileLine, int maxStatementId, int &loopMin, int &loop
     }
 
     int i = val1;
-    if (increment) {
-        while (i < val2) {
-            for (std::string x : myvector) {
-                maxStatementId++;
-                x = std::regex_replace(x, std::regex(varName), to_string(i));
-                parseExpression(fOut, x, maxStatementId);
-            }
-            i++;
+    while ((increment && i < val2) || (!increment && i > val2)) {
+        for (std::string x : myvector) {
+            maxStatementId++;
+            x = std::regex_replace(x, std::regex(varName), std::to_string(i));
+            std::vector<std::string> dependsOnList;
+            cout << "Parsing expression " << x << endl;
+            parse(x, dependsOnList); // Parse dependencies
+            updateGraph(maxStatementId, "", dependsOnList); // Update dependency graph
+            parseExpression(fOut, x, maxStatementId); // Parse and write the expression
         }
-    } else {
-        while (i > val2) {
-            for (std::string x : myvector) {
-                maxStatementId++;
-                x = std::regex_replace(x, std::regex(varName), to_string(i));
-                parseExpression(fOut, x, maxStatementId);
-            }
-            i--;
-        }
+        increment ? i++ : i--;
     }
 }
+
 
 bool overlap(const std::set<std::string>& s1, const std::set<std::string>& s2) {
     for (const auto& s : s1) {

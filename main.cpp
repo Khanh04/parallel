@@ -43,7 +43,7 @@ int main() {
     if (PARALLELIZE)
         fOut.open("testPar.cpp", std::fstream::out);
 
-    cout << endl << endl << "Parsing input file test.cpp" << endl;
+    std::cout << std::endl << std::endl << "Parsing input file test.cpp" << std::endl;
 
     if (PARALLELIZE)
         addDefinesAndIncludes(fOut);
@@ -53,7 +53,7 @@ int main() {
     string fileLine; // a string containing a line read from the input file
 
     while (getline(fIn, fileLine)) {
-        parseInputFileLine(fIn, fOut, f, functionName, fileLine, maxStatementId, inMain, PARALLELIZE);
+    parseInputFileLine(fIn, fOut, f, functionName, fileLine, maxStatementId, inMain, PARALLELIZE);
     }
 
     fIn.close(); // closing the input file

@@ -76,7 +76,7 @@ void parseInputFileLine(std::ifstream &fIn, std::ofstream &fOut,
         parseFunctionOrVariableDefinition(f, functionName, fileLine, maxStatementId, fIn, fOut, parallelize);
     } else if (word == "for") { // if "for" loop is detected
         int loopMin, loopMax; // loop range in statement IDs
-        parseLoop(fileLine, maxStatementId, loopMin, loopMax, p_lexer, fIn, fOut, parallelize);
+        parseForLoop(fileLine, maxStatementId, loopMin, loopMax, p_lexer, fIn, fOut, parallelize);
     } else if (word == "while") {
         parseWhile(word, p_lexer);
     } else {
