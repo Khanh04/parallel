@@ -17,7 +17,6 @@
 #include <map>
 #include <cctype>
 #include <cmath>
-#include <simd/math.h>
 
 
 #include "common.h"
