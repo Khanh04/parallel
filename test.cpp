@@ -10,12 +10,11 @@ int f(int aa, int bb){
 
 int main(){
     int a = 1, b = 2, p = 3, i;
-    int result, e;
+    int result, d;
     b = a+p;
     result = f(a,b);
-    for(i=0;i<3;++i)
-    {
-        e=p+2;
+    for(i=0;i<3;++i){ 
+        d=p+2;
     }
     b = a*p;
 }

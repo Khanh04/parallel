@@ -1,5 +1,8 @@
 
+#include <algorithm>
+#include <vector>
 #include "variables.h"
+
 using namespace std;
 
 int Var::maxId = 0;
