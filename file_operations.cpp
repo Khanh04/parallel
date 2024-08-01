@@ -86,6 +86,9 @@ void parseInputFileLine(std::ifstream &fIn, std::ofstream &fOut,
             if (!isFunction) {
                 parseExpression(fOut, fileLine, maxStatementId);
             }
+        } else if (fileLine.find("=") != std::string::npos) {
+        // New condition: Check for assignment operations
+        parseExpression(fOut, fileLine, maxStatementId);
         } else {
             std::cout << "Skipping line " << fileLine << std::endl;
             if (parallelize) {
