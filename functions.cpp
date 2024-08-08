@@ -233,6 +233,11 @@ void parseFunctionOrVariableDefinition(Functions &f, std::string &functionName, 
                     varStream << " = " << value;
                     p_lexer->advance();
                     word = p_lexer->get_token_text();
+                    // Parse dependencies
+                    std::vector<std::string> dependsOnList;
+                    std::string definitionLine = name + " = " + value;
+                    parse(definitionLine, dependsOnList);
+                    updateGraph(maxStatementId, Parser::_lhsToken, dependsOnList);
                 }
                 if (word == ";") {
                     varStream << word;
