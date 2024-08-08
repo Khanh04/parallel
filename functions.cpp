@@ -441,7 +441,7 @@ bool checkLoopDependency(int &loopMin, int &loopMax) {
     }
 }
 
-void parseForLoop(std::string fileLine, int maxStatementId, int &loopMin, int &loopMax, Lexer* &p_lexer, std::ifstream &fIn, std::ofstream &fOut, int parallelize) {
+void parseForLoop(std::string fileLine, int &maxStatementId, int &loopMin, int &loopMax, Lexer* &p_lexer, std::ifstream &fIn, std::ofstream &fOut, int parallelize) {
     std::string word, str, varName, value, varName2, value2, sec3;
     bool increment = true;
 
@@ -501,10 +501,10 @@ void parseForLoop(std::string fileLine, int maxStatementId, int &loopMin, int &l
             maxStatementId++;
             x = std::regex_replace(x, std::regex(varName), std::to_string(i));
             std::vector<std::string> dependsOnList;
-            cout << "Parsing expression " << x << endl;
+            cout << "#" << maxStatementId << "  Parsing expression " << x << endl;
             parse(x, dependsOnList); // Parse dependencies
             updateGraph(maxStatementId, "", dependsOnList); // Update dependency graph
-            parseExpression(fOut, x, maxStatementId); // Parse and write the expression
+            // parseExpression(fOut, x, maxStatementId); // Parse and write the expression
         }
         increment ? i++ : i--;
     }

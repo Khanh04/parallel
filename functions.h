@@ -26,7 +26,7 @@ private:
 
 void parseFunctionOrVariableDefinition(Functions &f, std::string &functionName, std::string fileLine, int maxStatementId, std::ifstream &fIn, std::ofstream &fOut, int parallelize);
 bool checkLoopDependency(int &loopMin, int &loopMax);
-void parseForLoop(std::string fileLine, int maxStatementId, int &loopMin, int &loopMax, Lexer* &p_lexer, std::ifstream &fIn, std::ofstream &fOut, int parallelize);
+void parseForLoop(std::string fileLine, int &maxStatementId, int &loopMin, int &loopMax, Lexer* &p_lexer, std::ifstream &fIn, std::ofstream &fOut, int parallelize);
 bool parseFunctionCall(Functions &f, std::ofstream &fOut, std::string fileLine, const int maxStatementId);
 void parseExpression(std::ofstream &fOut, std::string fileLine, const int maxStatementId);
 void parallelizeLoop(std::ifstream &fIn, std::ofstream &fOut, const std::string varName, const int val1, const int val2);
