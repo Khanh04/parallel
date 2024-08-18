@@ -50,6 +50,10 @@ void parseInputFileLine(std::ifstream &fIn, std::ofstream &fOut,
     if (fileLine.empty())
         return;
 
+    // Initialize read and write maps
+    std::unordered_map<std::string, bool> varReads;
+    std::unordered_map<std::string, bool> varWrites;
+
     // When { is detected, increase the number of open brackets
     // When } is detected, reduce the number of open brackets,
     // and act if the function is main:
@@ -69,16 +73,20 @@ void parseInputFileLine(std::ifstream &fIn, std::ofstream &fOut,
     std::istringstream ist{fileLine};
     Lexer* p_lexer = new Lexer{ist};
     std::string word = p_lexer->get_token_text();
-    // std::cout << "Word '" << word << "' found." << std::endl;
-
+    
     // If function definition is detected:
     if (primitiveType(word)) {
         parseFunctionOrVariableDefinition(f, functionName, fileLine, maxStatementId, fIn, fOut, parallelize);
-    } else if (word == "for") { // if "for" loop is detected
+    } else if (word == "for") { 
+        // if "for" loop is detected
         int loopMin, loopMax; // loop range in statement IDs
-        parseForLoop(fileLine, maxStatementId, loopMin, loopMax, p_lexer, fIn, fOut, parallelize);
-    } else if (word == "while") {
-        parseWhile(word, p_lexer);
+        parseForLoop(fileLine, maxStatementId, loopMin, loopMax, varReads, varWrites, fIn, fOut, parallelize);
+    } else if (word == "while") { 
+        // if "while" loop is detected
+        parseWhile(word, p_lexer, maxStatementId, varReads, varWrites, fIn, fOut);
+    } else if (word == "do") {
+        // if "do-while" loop is detected
+        parseDoWhile(word, p_lexer, maxStatementId, varReads, varWrites, fIn, fOut);
     } else {
         // Check if it's a function call or an expression
         if (fileLine.find("(") != std::string::npos && fileLine.find(")") != std::string::npos) {
@@ -87,8 +95,8 @@ void parseInputFileLine(std::ifstream &fIn, std::ofstream &fOut,
                 parseExpression(fOut, fileLine, maxStatementId);
             }
         } else if (fileLine.find("=") != std::string::npos) {
-        // New condition: Check for assignment operations
-        parseExpression(fOut, fileLine, maxStatementId);
+            // New condition: Check for assignment operations
+            parseExpression(fOut, fileLine, maxStatementId);
         } else {
             std::cout << "Skipping line " << fileLine << std::endl;
             if (parallelize) {

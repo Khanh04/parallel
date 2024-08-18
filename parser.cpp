@@ -7,6 +7,7 @@
 #include <iostream>
 #include <sstream>
 #include <cmath>
+#include <iostream> // Add this line
 
 // Static member initialization
 std::string Parser::_lhsToken;
@@ -28,20 +29,48 @@ double Parser::operator()(const std::string &s) {
     return result;
 }
 
+// Function to get the current value of a variable
+double Parser::get_variable_value(const std::string &varName) {
+    auto it = symbol_table.find(varName);
+    if (it != symbol_table.end()) {
+        return it->second;
+    } else {
+        throw std::runtime_error("Variable not found: " + varName);
+    }
+}
+
+
 double Parser::assign_expr() {
     Token t = p_lexer->get_current_token();
     std::string text = p_lexer->get_token_text();
     Parser::_lhsToken = "";
-    double result = add_expr();
+    double result = add_expr();  // Evaluate the LHS expression
 
+    // If the current token is an assignment, process the assignment
     if (p_lexer->get_current_token() == Token::Assign) {
-        if (t != Token::Id)
+        if (t != Token::Id) {
             throw std::runtime_error("Syntax error: target of assignment must be an identifier");
-        if (text == "pi" || text == "e")
+        }
+
+        if (text == "pi" || text == "e") {
             throw std::runtime_error("Syntax error: attempt to modify the constant " + text);
-        p_lexer->advance();
-        return symbol_table[text] = add_expr();
+        }
+
+        p_lexer->advance();  // Move past the assignment operator
+        
+        // Evaluate the RHS expression and assign it to the LHS variable
+        double rhs_value = add_expr();
+
+        // Handle cases like a = a + 1 by updating the symbol table
+        if (symbol_table.find(text) != symbol_table.end()) {
+            result = symbol_table[text] = rhs_value;
+        } else {
+            // If LHS is not in the symbol table, treat it as a new variable
+            symbol_table[text] = rhs_value;
+            result = rhs_value;
+        }
     }
+
     return result;
 }
 
@@ -248,6 +277,7 @@ void parse(const std::string &s, std::vector<std::string> &dependsOnList) {
 
     try {
         double result = parser(s);
+        std::cout << "Result: " << result << std::endl;
     } catch (const std::exception &e) {
         std::cerr << "Parsing error: " << e.what() << '\n';
     }

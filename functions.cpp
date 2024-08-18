@@ -441,7 +441,72 @@ bool checkLoopDependency(int &loopMin, int &loopMax) {
     }
 }
 
-void parseForLoop(std::string fileLine, int &maxStatementId, int &loopMin, int &loopMax, Lexer* &p_lexer, std::ifstream &fIn, std::ofstream &fOut, int parallelize) {
+bool overlap(const std::set<std::string>& s1, const std::set<std::string>& s2) {
+    for (const auto& s : s1) {
+        if (std::binary_search(s2.begin(), s2.end(), s))
+            return true;
+    }
+    return false;
+}
+
+void parseLoopBody(const std::string &varName, int val1, int val2, bool increment, std::vector<std::string> &myvector, int &maxStatementId, std::unordered_map<std::string, bool> &varReads, std::unordered_map<std::string, bool> &varWrites) {
+    cout << "Parsing loop body..." << val1 << val2 << endl;
+    int i = val1;
+    std::vector<std::string> dependsOnList;
+    while ((increment && i < val2) || (!increment && i > val2)) {
+        for (std::string x : myvector) {
+            maxStatementId++;
+            // Find the position of the assignment operator
+            size_t assignPos = x.find("=");
+
+            // Replace occurrences of varName only in the right-hand side of the assignment
+            if (assignPos != std::string::npos) {
+                std::string lhs = x.substr(0, assignPos + 1); // LHS including '='
+                std::string rhs = x.substr(assignPos + 1);    // RHS after '='
+
+                // Replace varName in the RHS
+                rhs = std::regex_replace(rhs, std::regex("\\b" + varName + "\\b"), std::to_string(i));
+
+                // Reconstruct the line with the modified RHS
+                x = lhs + rhs;
+            }
+            // std::cout << "#" << maxStatementId << "  Parsing expression " << x << std::endl;
+            parse(x, dependsOnList); // Parse dependencies
+
+            // Check reads and writes
+            bool loopCarried = false;
+            // std::cout << "Depends on: " << std::endl;
+            // for (const auto &var : dependsOnList) {
+            //     std::cout << var << std::endl;
+            // }
+            for (const auto &var : dependsOnList) {
+                if (varWrites[var]) {
+                    loopCarried = true; // Loop-carried dependence detected
+                }
+                varReads[var] = true;
+            }
+            updateGraph(maxStatementId, "", dependsOnList); // Update dependency graph
+
+            // Example of variable writing
+            if (x.find("=") != std::string::npos) {
+                std::string writtenVar = x.substr(0, x.find("="));
+                varWrites[writtenVar] = true;
+                if (varReads[writtenVar]) {
+                    loopCarried = true; // Loop-carried dependence detected
+                }
+            }
+
+            if (loopCarried) {
+                std::cout << "Loop-carried dependence detected.\n";
+            } else {
+                // std::cout << "Loop-independent.\n";
+            }
+        }
+        increment ? i++ : i--;
+    }
+}
+
+void parseForLoop(std::string fileLine, int &maxStatementId, int &loopMin, int &loopMax, std::unordered_map<std::string, bool> &varReads, std::unordered_map<std::string, bool> &varWrites, std::ifstream &fIn, std::ofstream &fOut, int parallelize) {
     std::string word, str, varName, value, varName2, value2, sec3;
     bool increment = true;
 
@@ -495,31 +560,10 @@ void parseForLoop(std::string fileLine, int &maxStatementId, int &loopMin, int &
         toParse.erase(std::remove_if(toParse.begin(), toParse.end(), ::isspace), toParse.end());
     }
 
-    int i = val1;
-    while ((increment && i < val2) || (!increment && i > val2)) {
-        for (std::string x : myvector) {
-            maxStatementId++;
-            x = std::regex_replace(x, std::regex(varName), std::to_string(i));
-            std::vector<std::string> dependsOnList;
-            cout << "#" << maxStatementId << "  Parsing expression " << x << endl;
-            parse(x, dependsOnList); // Parse dependencies
-            updateGraph(maxStatementId, "", dependsOnList); // Update dependency graph
-            // parseExpression(fOut, x, maxStatementId); // Parse and write the expression
-        }
-        increment ? i++ : i--;
-    }
+    parseLoopBody(varName, val1, val2, increment, myvector, maxStatementId, varReads, varWrites);
 }
 
-
-bool overlap(const std::set<std::string>& s1, const std::set<std::string>& s2) {
-    for (const auto& s : s1) {
-        if (std::binary_search(s2.begin(), s2.end(), s))
-            return true;
-    }
-    return false;
-}
-
-void parseWhile(std::string &word, Lexer *p_lexer) {
+void parseWhile(std::string &word, Lexer *p_lexer, int &maxStatementId, std::unordered_map<std::string, bool> &varReads, std::unordered_map<std::string, bool> &varWrites, std::ifstream &fIn, std::ofstream &fOut) {
     p_lexer->advance();
     word = p_lexer->get_token_text();
 
@@ -532,7 +576,63 @@ void parseWhile(std::string &word, Lexer *p_lexer) {
     p_lexer->advance();
     std::string value1 = p_lexer->get_token_text();
     
-    cout << endl << "While loop (" << varName << " " << sign << " " << value1 << ") found..." << endl;
+    std::cout << "\nWhile loop (" << varName << " " << sign << " " << value1 << ") found..." << std::endl;
+
+    std::vector<std::string> dependsOnList;
+    Parser parser;
+    Parser::_dependsOnList = &dependsOnList;
+    int val1 = parser.get_variable_value(varName);
+
+    // Set loop boundaries based on sign
+    bool increment = sign == "<" || sign == "<=";
+    int val2 = stoi(value1); // Depending on the condition, set a boundary that can be adjusted
+
+    getline(fIn, word);
+    std::string toParse = word;
+    std::vector<std::string> myvector;
+    while (toParse.find('}') == std::string::npos) {
+        myvector.push_back(toParse);
+        getline(fIn, word);
+        toParse = word;
+        toParse.erase(std::remove_if(toParse.begin(), toParse.end(), ::isspace), toParse.end());
+    }
+
+    parseLoopBody(varName, val1, val2, increment, myvector, maxStatementId, varReads, varWrites);
+}
+
+void parseDoWhile(std::string &word, Lexer *p_lexer, int &maxStatementId, std::unordered_map<std::string, bool> &varReads, std::unordered_map<std::string, bool> &varWrites, std::ifstream &fIn, std::ofstream &fOut) {
+    std::cout << "\nDo-While loop found...\n";
+    
+    getline(fIn, word);
+    std::string toParse = word;
+    std::vector<std::string> myvector;
+    while (toParse.find('}') == std::string::npos) {
+        myvector.push_back(toParse);
+        getline(fIn, word);
+        toParse = word;
+        toParse.erase(std::remove_if(toParse.begin(), toParse.end(), ::isspace), toParse.end());
+    }
+
+    // Parse the condition after the body
+    p_lexer->advance();
+    p_lexer->advance();
+    std::string varName = p_lexer->get_token_text();
+    
+    p_lexer->advance();
+    std::string sign = p_lexer->get_token_text();
+    
+    p_lexer->advance();
+    std::string value1 = p_lexer->get_token_text();
+
+    std::vector<std::string> dependsOnList;
+    Parser parser;
+    Parser::_dependsOnList = &dependsOnList;
+    int val1 = parser.get_variable_value(varName);
+
+    bool increment = sign == "<" || sign == "<=";
+    int val2 = stoi(value1);
+
+    parseLoopBody(varName, val1, val2, increment, myvector, maxStatementId, varReads, varWrites);
 }
 
 bool primitiveType(std::string &word) {

@@ -13,7 +13,8 @@ public:
     double operator()(const std::string &s);
     static std::string _lhsToken;
     static std::vector<std::string> *_dependsOnList;
-
+    double get_variable_value(const std::string &varName);
+    
 private:
     Lexer *p_lexer;
     double assign_expr();
