@@ -485,7 +485,7 @@ void parseLoopBody(const std::string &varName, int val1, int val2, bool incremen
                 }
                 varReads[var] = true;
             }
-            updateGraph(maxStatementId, "", dependsOnList); // Update dependency graph
+            updateGraph(maxStatementId, Parser::_lhsToken, dependsOnList); // Update dependency graph
 
             // Example of variable writing
             if (x.find("=") != std::string::npos) {
