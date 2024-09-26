@@ -7,12 +7,12 @@
 #include <iostream>
 #include <sstream>
 #include <cmath>
-#include <iostream> // Add this line
+#include <set>
+#include <iostream> 
 
 // Static member initialization
 std::string Parser::_lhsToken;
-std::vector<std::string> *Parser::_dependsOnList = nullptr;
-
+std::set<std::string>* Parser::_dependsOnList = nullptr;
 // Symbol table definition
 std::map<std::string, double> symbol_table;
 
@@ -151,53 +151,40 @@ double Parser::primary() {
 
     switch (p_lexer->get_current_token()) {
         case Token::Id:
-            if (Parser::_lhsToken == "") {
+            if (Parser::_lhsToken.empty()) {
                 Parser::_lhsToken = text;
                 p_lexer->advance();
                 std::string word = p_lexer->get_token_text();
                 if (word == "[") {
-                    p_lexer->advance();
-                    std::string value = p_lexer->get_token_text();
-                    p_lexer->advance();
-                    word = p_lexer->get_token_text();
-                    if (word != "]") {
-                        throw std::runtime_error("Parsing expression error: Expected ']' sign!");
-                    }
-                    Parser::_lhsToken = text + "[" + value + "]";
-                    p_lexer->advance();
+                    Parser::_lhsToken = handleBracketedExpression(text);
                 }
             } else {
                 p_lexer->advance();
                 std::string word = p_lexer->get_token_text();
                 if (word == "[") {
-                    p_lexer->advance();
-                    std::string value = p_lexer->get_token_text();
-                    p_lexer->advance();
-                    word = p_lexer->get_token_text();
-                    if (word != "]") {
-                        throw std::runtime_error("Parsing expression error: Expected ']' sign!");
-                    }
-                    text += "[" + value + "]";
-                    p_lexer->advance();
+                    text = handleBracketedExpression(text);
                 }
-                if (std::find(_dependsOnList->begin(), _dependsOnList->end(), text) == _dependsOnList->end()) {
-                    Parser::_dependsOnList->push_back(text);
-                }
+                // Use std::set for _dependsOnList to simplify and avoid duplicates
+                Parser::_dependsOnList->insert(text);
             }
             return symbol_table[text];
 
         case Token::Number:
-            if (std::find(_dependsOnList->begin(), _dependsOnList->end(), "PR") == _dependsOnList->end()) {
-                Parser::_dependsOnList->push_back("PR");
-            }
+            Parser::_dependsOnList->insert("PR");  // Use std::set for efficient checking
             p_lexer->advance();
-            return to_number(text);
+            // Safely convert text to number
+            try {
+                return to_number(text);
+            } catch (const std::invalid_argument&) {
+                throw std::runtime_error("Syntax error: invalid number format");
+            }
 
         case Token::Lp:
             p_lexer->advance();
             arg = add_expr();
-            if (p_lexer->get_current_token() != Token::Rp)
+            if (p_lexer->get_current_token() != Token::Rp) {
                 throw std::runtime_error("Syntax error: missing ) after subexpression");
+            }
             p_lexer->advance();
             return arg;
 
@@ -212,16 +199,27 @@ double Parser::primary() {
             return tan(arg);
 
         case Token::Asin:
-            return asin(get_argument());
+            arg = get_argument();
+            if (arg < -1 || arg > 1) {
+                throw std::runtime_error("Runtime error: asin out of range");
+            }
+            return asin(arg);
 
         case Token::Acos:
-            return acos(get_argument());
+            arg = get_argument();
+            if (arg < -1 || arg > 1) {
+                throw std::runtime_error("Runtime error: acos out of range");
+            }
+            return acos(arg);
 
         case Token::Atan:
             return atan(get_argument());
 
         case Token::Log:
             arg = get_argument();
+            if (arg <= 0) {
+                throw std::runtime_error("Runtime error: logarithm of non-positive number");
+            }
             return log(arg);
 
         case Token::Exp:
@@ -229,27 +227,37 @@ double Parser::primary() {
 
         case Token::Log10:
             arg = get_argument();
+            if (arg <= 0) {
+                throw std::runtime_error("Runtime error: logarithm of non-positive number");
+            }
             return log10(arg);
-
-        // case Token::Exp10:
-        //     return exp10(get_argument());
 
         case Token::Sqrt:
             arg = get_argument();
-            if (arg < 0)
+            if (arg < 0) {
                 throw std::runtime_error("Runtime error: attempt to take square root of negative number");
+            }
             return sqrt(arg);
 
         case Token::Int:
             arg = get_argument();
-            if (arg < 0)
-                return ceil(arg);
-            else
-                return floor(arg);
+            return (arg < 0) ? ceil(arg) : floor(arg);
 
         default:
-            throw std::runtime_error("Syntax error: invalid primary expression");
+            throw std::runtime_error("Syntax error: invalid primary expression. Token: " + p_lexer->get_token_text());
     }
+}
+
+std::string Parser::handleBracketedExpression(const std::string& text) {
+    p_lexer->advance();
+    std::string value = p_lexer->get_token_text();
+    p_lexer->advance();
+    std::string word = p_lexer->get_token_text();
+    if (word != "]") {
+        throw std::runtime_error("Parsing expression error: Expected ']' sign!");
+    }
+    p_lexer->advance();
+    return text + "[" + value + "]";
 }
 
 void Parser::check_domain(double x, double y) {
@@ -271,7 +279,7 @@ double Parser::get_argument() {
     return arg;
 }
 
-void parse(const std::string &s, std::vector<std::string> &dependsOnList) {
+void parse(const std::string &s, std::set<std::string> &dependsOnList) {
     Parser parser;
     Parser::_dependsOnList = &dependsOnList;
 

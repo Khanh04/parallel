@@ -6,15 +6,17 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 
 class Parser {
 public:
     Parser();
     double operator()(const std::string &s);
     static std::string _lhsToken;
-    static std::vector<std::string> *_dependsOnList;
+    static std::set<std::string>* _dependsOnList;
     double get_variable_value(const std::string &varName);
-    
+
+
 private:
     Lexer *p_lexer;
     double assign_expr();
@@ -25,9 +27,10 @@ private:
     double primary();
     double get_argument();
     static void check_domain(double x, double y);
+    std::string handleBracketedExpression(const std::string& text);
 };
 
-void parse(const std::string &s, std::vector<std::string> &dependsOnList);
+void parse(const std::string &s, std::set<std::string> &dependsOnList);
 
 // Symbol table to hold variable values
 extern std::map<std::string, double> symbol_table;

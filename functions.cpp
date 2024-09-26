@@ -78,7 +78,7 @@ bool parseFunctionCall(Functions &f, std::ofstream &fOut, std::string fileLine, 
     p_lexer->advance();
     word = p_lexer->get_token_text();
 
-    std::vector<std::string> dependsOnList;
+    std::set<std::string> dependsOnList;  // Now using std::set to store dependencies
     bool isFunction = false;
 
     if (word == "=") {
@@ -94,9 +94,8 @@ bool parseFunctionCall(Functions &f, std::ofstream &fOut, std::string fileLine, 
                 sPushParameters += "    PUSH(" + word + ");\n";
                 sPopParameters += "    POP(" + word + ");\n";
 
-                if (std::find(dependsOnList.begin(), dependsOnList.end(), word) == dependsOnList.end()) {
-                    dependsOnList.push_back(word);
-                }
+                // No need for std::find, just insert into the set
+                dependsOnList.insert(word);
 
                 p_lexer->advance();
                 word = p_lexer->get_token_text();
@@ -120,9 +119,8 @@ bool parseFunctionCall(Functions &f, std::ofstream &fOut, std::string fileLine, 
             sPushParameters += "    PUSH(" + word + ");\n";
             sPopParameters += "    POP(" + word + ");\n";
 
-            if (std::find(dependsOnList.begin(), dependsOnList.end(), word) == dependsOnList.end()) {
-                dependsOnList.push_back(word);
-            }
+            // Insert the word into the set directly
+            dependsOnList.insert(word);
 
             p_lexer->advance();
             word = p_lexer->get_token_text();
@@ -142,11 +140,12 @@ bool parseFunctionCall(Functions &f, std::ofstream &fOut, std::string fileLine, 
     if (!isFunction)
         return false;
 
+    // Update the graph with dependencies from the set
     if (!returnVariable.empty() && returnVariable != "=") {
         updateGraph(maxStatementId, returnVariable, dependsOnList);
     }
 
-    // Write a parallel version of a for loop to the testPar.cpp:
+    // Write the parallel version to fOut
     fOut << endl;
 
     fOut << endl << "int tempRank = 1;" << endl;
@@ -234,7 +233,7 @@ void parseFunctionOrVariableDefinition(Functions &f, std::string &functionName, 
                     p_lexer->advance();
                     word = p_lexer->get_token_text();
                     // Parse dependencies
-                    std::vector<std::string> dependsOnList;
+                    std::set<std::string> dependsOnList;
                     std::string definitionLine = name + " = " + value;
                     parse(definitionLine, dependsOnList);
                     updateGraph(maxStatementId, Parser::_lhsToken, dependsOnList);
@@ -293,7 +292,7 @@ void parseExpression(std::ofstream &fOut, std::string fileLine, const int maxSta
     if (PARALLELIZE)
         fOut << fileLine << endl;
 
-    std::vector<std::string> dependsOnList;
+    std::set<std::string> dependsOnList;
     parse(fileLine, dependsOnList);
     updateGraph(maxStatementId, Parser::_lhsToken, dependsOnList);
 }
@@ -452,7 +451,7 @@ bool overlap(const std::set<std::string>& s1, const std::set<std::string>& s2) {
 void parseLoopBody(const std::string &varName, int val1, int val2, bool increment, std::vector<std::string> &myvector, int &maxStatementId, std::unordered_map<std::string, bool> &varReads, std::unordered_map<std::string, bool> &varWrites) {
     cout << "Parsing loop body..." << val1 << val2 << endl;
     int i = val1;
-    std::vector<std::string> dependsOnList;
+    std::set<std::string> dependsOnList;
     while ((increment && i < val2) || (!increment && i > val2)) {
         for (std::string x : myvector) {
             maxStatementId++;
@@ -578,7 +577,7 @@ void parseWhile(std::string &word, Lexer *p_lexer, int &maxStatementId, std::uno
     
     std::cout << "\nWhile loop (" << varName << " " << sign << " " << value1 << ") found..." << std::endl;
 
-    std::vector<std::string> dependsOnList;
+    std::set<std::string> dependsOnList;
     Parser parser;
     Parser::_dependsOnList = &dependsOnList;
     int val1 = parser.get_variable_value(varName);
@@ -624,7 +623,7 @@ void parseDoWhile(std::string &word, Lexer *p_lexer, int &maxStatementId, std::u
     p_lexer->advance();
     std::string value1 = p_lexer->get_token_text();
 
-    std::vector<std::string> dependsOnList;
+    std::set<std::string> dependsOnList;
     Parser parser;
     Parser::_dependsOnList = &dependsOnList;
     int val1 = parser.get_variable_value(varName);

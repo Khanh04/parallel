@@ -16,7 +16,7 @@ int main(){
     result = f(a,b);
     for(i=0;i<3;++i){ 
         d=p+2;
-        arr[i] = d;
+        arr[i] = arr[i-1];
         arr[i-1] = p + 1;
     }
     while (a < 10) {
