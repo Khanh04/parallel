@@ -49,6 +49,7 @@ public:
     void addIndex(int statementId);
     bool operator==(Dependency dep);
     bool statementIdInStatementRangeExists(int min, int max);
+    std::string getStatementIdsString();
 private:
     Var _variable;
     Var _dependsOn;

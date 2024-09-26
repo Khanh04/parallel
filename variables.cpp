@@ -130,6 +130,18 @@ bool Dependency::statementIdInStatementRangeExists(int min, int max) {
     return false;
 }
 
+std::string Dependency::getStatementIdsString() {
+    std::ostringstream oss;
+    for (size_t i = 0; i < statementIds.size(); ++i) {
+        if (i > 0) {
+            oss << ",";
+        }
+        oss << statementIds[i];
+    }
+    return oss.str();
+}
+
+
 void Graph::addDependency(Var &var, Var &dependsOn, int statementId) {
     Dependency dep(var, dependsOn, statementId);
     if (std::find(dependencies.begin(), dependencies.end(), dep) == dependencies.end()) {
@@ -149,42 +161,53 @@ void Graph::print() {
 
 void Graph::printTable() {
     Variables &v = Variables::varSet[Variables::iCurrentVarSet];
+    vector<int> maxLengths(v.vars.size());
+
+    // Calculate the maximum length of each column (for headers and table body)
+    for (int i = 0; i < v.vars.size(); i++) {
+        maxLengths[i] = v.vars[i].nameLength();
+        for (int j = 0; j < v.vars.size(); j++) {
+            for (auto &dep : dependencies) {
+                if (dep == Dependency(v.vars[j], v.vars[i], 0)) {
+                    int length = dep.getStatementIdsString().length();
+                    if (length > maxLengths[j])  // Check for j, not i
+                        maxLengths[j] = length;  // Store max length for each column
+                }
+            }
+        }
+    }
+
+    // Print the header row
     cout << "Dependency table:" << endl;
-    cout << "     ";
+    cout << "     "; // Starting space for row labels
     for (int i = 0; i < v.vars.size(); i++) {
         cout << v.vars[i];
-        if (v.vars[i].nameLength() == 1)
-            cout << "    ";
-        if (v.vars[i].nameLength() == 2)
-            cout << "   ";
-        if (v.vars[i].nameLength() == 3)
-            cout << "  ";
-        if (v.vars[i].nameLength() == 4)
-            cout << " ";
+        int padding = maxLengths[i] - v.vars[i].nameLength() + 5; // Add extra padding
+        cout << string(padding, ' '); // Dynamic padding for variable names
     }
     cout << endl;
+
+    // Print each row
     for (int i = 0; i < v.vars.size(); i++) {
         cout << v.vars[i];
-        if (v.vars[i].nameLength() == 1)
-            cout << "    ";
-        if (v.vars[i].nameLength() == 2)
-            cout << "   ";
-        if (v.vars[i].nameLength() == 3)
-            cout << "  ";
-        if (v.vars[i].nameLength() == 4)
-            cout << " ";
+        int padding = maxLengths[i] - v.vars[i].nameLength() + 5;
+        cout << string(padding, ' '); // Padding after row label
+
         for (int j = 0; j < v.vars.size(); j++) {
             bool found = false;
             for (auto &dep : dependencies) {
                 if (dep == Dependency(v.vars[j], v.vars[i], 0)) {
-                    dep.printStatementIds();
-                    cout << "    ";
+                    string statementIdsStr = dep.getStatementIdsString();
+                    cout << statementIdsStr;
+                    int spacePadding = maxLengths[j] - statementIdsStr.length() + 5;
+                    cout << string(spacePadding, ' '); // Align based on statement ID length
                     found = true;
                     break;
                 }
             }
-            if (!found)
-                cout << "     ";
+            if (!found) {
+                cout << string(maxLengths[j] + 5, ' '); // If no dependency, just add space
+            }
         }
         cout << endl;
     }
