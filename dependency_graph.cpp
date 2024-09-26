@@ -8,13 +8,13 @@ void updateGraph(const int maxStatementId, std::string lhsVar, std::set<std::str
     Variables &v = Variables::varSet[Variables::iCurrentVarSet];
     
     // Debug output
-    cout << "maxStatementId: " << maxStatementId << endl;
-    cout << "lhsVar: " << lhsVar << endl;
-    cout << "dependsOnList: ";
-    for (const auto &var : dependsOnList) {
-        cout << var << " ";
-    }
-    cout << endl;
+    // cout << "maxStatementId: " << maxStatementId << endl;
+    // cout << "lhsVar: " << lhsVar << endl;
+    // cout << "dependsOnList: ";
+    // for (const auto &var : dependsOnList) {
+    //     cout << var << " ";
+    // }
+    // cout << endl;
     
     // Find the LHS variable
     Var *lhs = v.findVar(lhsVar);

@@ -8,7 +8,8 @@
 #include <sstream>
 #include <cmath>
 #include <set>
-#include <iostream> 
+#include <iostream>
+#include <stdio.h>
 
 // Static member initialization
 std::string Parser::_lhsToken;
@@ -148,8 +149,12 @@ double Parser::unary_expr() {
 double Parser::primary() {
     std::string text = p_lexer->get_token_text();
     double arg;
+    Token current_token = p_lexer->get_current_token();
+    switch (current_token) {
+        case Token::Array:
+            Parser::_dependsOnList->insert(text);
+            return 0;
 
-    switch (p_lexer->get_current_token()) {
         case Token::Id:
             if (Parser::_lhsToken.empty()) {
                 Parser::_lhsToken = text;
@@ -251,6 +256,7 @@ double Parser::primary() {
 std::string Parser::handleBracketedExpression(const std::string& text) {
     p_lexer->advance();
     std::string value = p_lexer->get_token_text();
+    std::cout << "Value: " << value << std::endl;
     p_lexer->advance();
     std::string word = p_lexer->get_token_text();
     if (word != "]") {
@@ -285,7 +291,7 @@ void parse(const std::string &s, std::set<std::string> &dependsOnList) {
 
     try {
         double result = parser(s);
-        std::cout << "Result: " << result << std::endl;
+        // std::cout << "Result: " << result << std::endl;
     } catch (const std::exception &e) {
         std::cerr << "Parsing error: " << e.what() << '\n';
     }

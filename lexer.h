@@ -5,9 +5,9 @@
 #include <string>
 
 enum class Token {
-    Id, Number, Sin, Cos, Tan, Asin, Acos, Atan, Log, Exp,
+    Array, Id, Number, Sin, Cos, Tan, Asin, Acos, Atan, Log, Exp,
     Log10, Exp10, Sqrt, Int, Assign='=', Plus='+', Minus='-',
-    Mul='*', Div='/', Mod='%', Pow='^', Lp='(', Rp=')', Eofsym=-1
+    Mul='*', Div='/', Mod='%', Pow='^', Lp='(', Rp=')', Eofsym=-1, 
 };
 
 class Lexer {

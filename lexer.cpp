@@ -31,32 +31,43 @@ Token Lexer::get_token() {
     token_buffer.clear();
     char c = input.get();
     
+    // Skip whitespace
     while (isspace(c)) c = input.get();
     if (!input) return Token::Eofsym;
-    
+
+    // Handle identifiers and potential array-like expressions such as arr[i-1]
     if (isalpha(c)) {
-        token_buffer = c;
+        token_buffer = c; // Start token buffer with the first character
         c = input.get();
-        while (isalnum(c) || (c == '[') || (c == ']')) {
+        while (isalnum(c)) {  // Continue reading alphanumeric characters (identifier part)
             token_buffer += c;
             c = input.get();
         }
+
+        // Check if it's an array-like expression (e.g., arr[i-1])
+        if (c == '[') {
+            token_buffer += c;  // Add '[' to token buffer
+            c = input.get();
+            while (c != ']') {  // Continue adding everything inside the brackets
+                token_buffer += c;
+                c = input.get();
+            }
+            token_buffer += ']';  // Add closing ']'
+            c = input.get();      // Move past the closing ']'
+
+            input.putback(c);     // Return the next character to the stream
+
+            // Return as an array token
+            return Token::Array;
+        }
+
+        // Put back any character that might be part of the next token
         input.putback(c);
-        if (token_buffer == "sin") return Token::Sin;
-        if (token_buffer == "cos") return Token::Cos;
-        if (token_buffer == "tan") return Token::Tan;
-        if (token_buffer == "asin") return Token::Asin;
-        if (token_buffer == "acos") return Token::Acos;
-        if (token_buffer == "atan") return Token::Atan;
-        if (token_buffer == "log") return Token::Log;
-        if (token_buffer == "exp") return Token::Exp;
-        if (token_buffer == "log10") return Token::Log10;
-        if (token_buffer == "exp10") return Token::Exp10;
-        if (token_buffer == "sqrt") return Token::Sqrt;
-        if (token_buffer == "int") return Token::Int;
-        return Token::Id;
+
+        return Token::Id;  // Treat this as a single identifier token
     }
-    
+
+    // Handle numbers
     if (isdigit(c)) {
         token_buffer = c;
         c = input.get();
@@ -76,7 +87,7 @@ Token Lexer::get_token() {
         input.putback(c);
         return Token::Number;
     }
-    
+    // Handle decimal numbers starting with '.'
     if (c == '.') {
         token_buffer = c;
         c = input.get();
@@ -91,7 +102,8 @@ Token Lexer::get_token() {
         input.putback(c);
         return Token::Number;
     }
-    
+
+    // Handle single character tokens (symbols and operators)
     token_buffer = c;
     switch (c) {
         case '=':
@@ -106,12 +118,12 @@ Token Lexer::get_token() {
         case ';':
         case '<':
         case '>':
-        case '[':
+        case '[':  // Handle array access and putback if needed
         case ']':
         case ',':
-        return Token(c);
+            return Token(c);  // Return as a token
     }
-    
+
     throw Lexical_error{token_buffer};
 }
 

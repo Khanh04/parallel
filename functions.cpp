@@ -198,7 +198,6 @@ void parseFunctionOrVariableDefinition(Functions &f, std::string &functionName, 
     std::istringstream ist{fileLine};
     Lexer* p_lexer = new Lexer{ist};
     std::string type = p_lexer->get_token_text();
-    std::cout << "Type: " << type << std::endl;
     p_lexer->advance();
 
     bool isFunction = false;
@@ -208,10 +207,8 @@ void parseFunctionOrVariableDefinition(Functions &f, std::string &functionName, 
 
     while (true) {
         std::string name = p_lexer->get_token_text();
-        std::cout << "Name: " << name << std::endl;
         p_lexer->advance();
         std::string word = p_lexer->get_token_text();
-        std::cout << "Word: " << word << std::endl;
 
         if (word == "(") {
             isFunction = true;
@@ -469,15 +466,10 @@ void parseLoopBody(const std::string &varName, int val1, int val2, bool incremen
                 // Reconstruct the line with the modified RHS
                 x = lhs + rhs;
             }
-            // std::cout << "#" << maxStatementId << "  Parsing expression " << x << std::endl;
             parse(x, dependsOnList); // Parse dependencies
 
             // Check reads and writes
             bool loopCarried = false;
-            // std::cout << "Depends on: " << std::endl;
-            // for (const auto &var : dependsOnList) {
-            //     std::cout << var << std::endl;
-            // }
             for (const auto &var : dependsOnList) {
                 if (varWrites[var]) {
                     loopCarried = true; // Loop-carried dependence detected
@@ -498,7 +490,7 @@ void parseLoopBody(const std::string &varName, int val1, int val2, bool incremen
             if (loopCarried) {
                 std::cout << "Loop-carried dependence detected.\n";
             } else {
-                // std::cout << "Loop-independent.\n";
+                std::cout << "Loop-independent.\n";
             }
         }
         increment ? i++ : i--;
