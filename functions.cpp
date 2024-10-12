@@ -446,10 +446,14 @@ bool overlap(const std::set<std::string>& s1, const std::set<std::string>& s2) {
 }
 
 void parseLoopBody(const std::string &varName, int val1, int val2, bool increment, std::vector<std::string> &myvector, int &maxStatementId, std::unordered_map<std::string, bool> &varReads, std::unordered_map<std::string, bool> &varWrites) {
-    cout << "Parsing loop body..." << val1 << val2 << endl;
+    cout << "Parsing loop body..."<< varName << val1 << val2 << endl;
     int i = val1;
     std::set<std::string> dependsOnList;
+    Parser parser;
+    Parser::_dependsOnList = &dependsOnList;
+
     while ((increment && i < val2) || (!increment && i > val2)) {
+        parser.set_symbol_value(varName, i);
         for (std::string x : myvector) {
             maxStatementId++;
             // Find the position of the assignment operator

@@ -14,7 +14,7 @@ int main(){
     int arr[5];
     b = a+p;
     result = f(a,b);
-    for(i=0;i<3;++i){ 
+    for(i=1;i<5;++i){ 
         d=p+2;
         arr[i] = arr[i-1];
         arr[i-1] = p + 1;

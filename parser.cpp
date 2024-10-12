@@ -10,6 +10,11 @@
 #include <set>
 #include <iostream>
 #include <stdio.h>
+#include <stack>
+#include <stdexcept>
+#include <cctype>
+#include <unordered_map>
+
 
 // Static member initialization
 std::string Parser::_lhsToken;
@@ -40,12 +45,20 @@ double Parser::get_variable_value(const std::string &varName) {
     }
 }
 
+void Parser::set_symbol_value(const std::string &varName, double value) {
+    if (varName == "pi" || varName == "e") {
+        throw std::runtime_error("Cannot update constant variable: " + varName);
+    }
+    symbol_table[varName] = value;
+}
 
 double Parser::assign_expr() {
     Token t = p_lexer->get_current_token();
     std::string text = p_lexer->get_token_text();
+    std::cout << "Text: " << text << std::endl;
     Parser::_lhsToken = "";
     double result = add_expr();  // Evaluate the LHS expression
+    std::cout << "LHS: " << Parser::_lhsToken << std::endl;
 
     // If the current token is an assignment, process the assignment
     if (p_lexer->get_current_token() == Token::Assign) {
@@ -152,9 +165,76 @@ double Parser::primary() {
     Token current_token = p_lexer->get_current_token();
     switch (current_token) {
         case Token::Array:
-            Parser::_dependsOnList->insert(text);
-            return 0;
+        {            
+            std::cout << text << std::endl;
+            size_t openBracket = text.find('[');
+            size_t closeBracket = text.find(']');
+            
+            // Check for valid brackets in the array expression
+            if (openBracket == std::string::npos || closeBracket == std::string::npos || closeBracket <= openBracket) {
+                throw std::runtime_error("Invalid array access syntax in: " + text);
+            }
 
+            // Array name is everything before the '['
+            std::string arrayName = text.substr(0, openBracket);
+
+            // Index expression is everything inside the brackets
+            std::string indexExpr = text.substr(openBracket + 1, closeBracket - openBracket - 1);
+            // Process the index expression to replace variables with their current values from symbol_table
+            std::string evaluatedIndexExpr;
+            std::istringstream iss(indexExpr);
+            std::string token;
+            // Tokenize the index expression
+            for (size_t pos = 0; pos < indexExpr.size(); ++pos) {
+                char c = indexExpr[pos];
+
+                if (std::isalpha(c)) {
+                    // Handle variables
+                    token += c;
+                    
+                    // Process and replace the full variable name with its value
+                    while (pos + 1 < indexExpr.size() && std::isalnum(indexExpr[pos + 1])) {
+                        token += indexExpr[++pos];  // Continue reading the variable name
+                    }
+                    
+                    // Replace the variable with its value
+                    double variableValue = get_variable_value(token);
+
+                    evaluatedIndexExpr += std::to_string(variableValue);
+                    token.clear(); // Clear token for the next variable or literal
+                }
+                else if (std::isdigit(c) || c == '.') {
+                    // Handle numeric values
+                    token += c;
+                    
+                    // Continue reading the full numeric value
+                    while (pos + 1 < indexExpr.size() && (std::isdigit(indexExpr[pos + 1]) || indexExpr[pos + 1] == '.')) {
+                        token += indexExpr[++pos];
+                    }
+                    
+                    evaluatedIndexExpr += token;  // Append the complete number
+                    token.clear();
+                }
+                else if (isOperator(c) || c == '(' || c == ')') {
+                    // Directly append operators and parentheses
+                    evaluatedIndexExpr += c;
+                }
+                else if (std::isspace(c)) {
+                    // Skip any whitespace
+                    continue;
+                }
+                else {
+                    throw std::runtime_error("Invalid character in expression: " + std::string(1, c));
+                }
+            }
+
+            // Now, evaluate the expression `evaluatedIndexExpr`, e.g., "5-1"
+            double evaluatedIndex = evaluateExpression(evaluatedIndexExpr);
+
+            std::string evaluatedArrayAccess = arrayName + "[" + std::to_string(static_cast<int>(evaluatedIndex)) + "]";
+            Parser::_dependsOnList->insert(evaluatedArrayAccess);
+            return symbol_table[evaluatedArrayAccess];
+        }
         case Token::Id:
             if (Parser::_lhsToken.empty()) {
                 Parser::_lhsToken = text;
@@ -295,4 +375,87 @@ void parse(const std::string &s, std::set<std::string> &dependsOnList) {
     } catch (const std::exception &e) {
         std::cerr << "Parsing error: " << e.what() << '\n';
     }
+}
+
+
+// Helper functions to check operator precedence and type
+int precedence(char op) {
+    if (op == '+' || op == '-') return 1;
+    if (op == '*' || op == '/') return 2;
+    return 0;
+}
+
+bool isOperator(char c) {
+    return c == '+' || c == '-' || c == '*' || c == '/';
+}
+
+// Function to perform arithmetic operations
+double applyOperation(double a, double b, char op) {
+    switch (op) {
+        case '+': return a + b;
+        case '-': return a - b;
+        case '*': return a * b;
+        case '/': 
+            if (b == 0) throw std::runtime_error("Division by zero");
+            return a / b;
+        default: throw std::runtime_error("Unsupported operator");
+    }
+}
+
+// Main function to evaluate the arithmetic expression
+double evaluateExpression(const std::string &expr) {
+    std::stack<double> values; // Stack for numbers
+    std::stack<char> ops; // Stack for operators
+    std::string token;
+    std::istringstream tokens(expr);
+
+    for (size_t i = 0; i < expr.size(); ++i) {
+        char c = expr[i];
+
+        // Skip whitespace
+        if (std::isspace(c)) continue;
+
+        // Parse numbers (handling decimals)
+        if (std::isdigit(c) || c == '.') {
+            token += c;
+            // Continue reading digits (or a single decimal)
+            while (i + 1 < expr.size() && (std::isdigit(expr[i + 1]) || expr[i + 1] == '.')) {
+                token += expr[++i];
+            }
+            // Push the full number onto the values stack
+            values.push(std::stod(token));
+            token.clear();
+        }
+        // Handle negative numbers at the start or after an operator
+        else if (c == '-' && (i == 0 || isOperator(expr[i - 1]))) {
+            token += c;
+            // Continue reading digits for a negative number
+            while (i + 1 < expr.size() && (std::isdigit(expr[i + 1]) || expr[i + 1] == '.')) {
+                token += expr[++i];
+            }
+            values.push(std::stod(token));
+            token.clear();
+        }
+        // Handle operators
+        else if (isOperator(c)) {
+            // Apply operators based on precedence
+            while (!ops.empty() && precedence(ops.top()) >= precedence(c)) {
+                double b = values.top(); values.pop();
+                double a = values.top(); values.pop();
+                char op = ops.top(); ops.pop();
+                values.push(applyOperation(a, b, op));
+            }
+            ops.push(c);
+        }
+    }
+
+    // Apply remaining operators to remaining values
+    while (!ops.empty()) {
+        double b = values.top(); values.pop();
+        double a = values.top(); values.pop();
+        char op = ops.top(); ops.pop();
+        values.push(applyOperation(a, b, op));
+    }
+
+    return values.top();
 }

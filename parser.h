@@ -7,6 +7,7 @@
 #include <vector>
 #include <map>
 #include <set>
+#include <stdio.h>
 
 class Parser {
 public:
@@ -15,7 +16,7 @@ public:
     static std::string _lhsToken;
     static std::set<std::string>* _dependsOnList;
     double get_variable_value(const std::string &varName);
-
+    void set_symbol_value(const std::string &varName, double value);
 
 private:
     Lexer *p_lexer;
@@ -34,5 +35,8 @@ void parse(const std::string &s, std::set<std::string> &dependsOnList);
 
 // Symbol table to hold variable values
 extern std::map<std::string, double> symbol_table;
-
+int precedence(char op);
+bool isOperator(char c);
+double applyOperation(double a, double b, char op);
+double evaluateExpression(const std::string &expr);
 #endif // PARSER_H
