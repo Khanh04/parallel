@@ -55,7 +55,7 @@ void Parser::set_symbol_value(const std::string &varName, double value) {
 double Parser::assign_expr() {
     Token t = p_lexer->get_current_token();
     std::string text = p_lexer->get_token_text();
-    std::cout << "Text: " << text << std::endl;
+    // std::cout << "Text: " << text << std::endl;
     Parser::_lhsToken = "";
     double result = add_expr();  // Evaluate the LHS expression
     std::cout << "LHS: " << Parser::_lhsToken << std::endl;

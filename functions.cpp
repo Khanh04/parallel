@@ -456,6 +456,7 @@ void parseLoopBody(const std::string &varName, int val1, int val2, bool incremen
         parser.set_symbol_value(varName, i);
         for (std::string x : myvector) {
             maxStatementId++;
+            cout << "#" << maxStatementId << " " << x << endl;
             // Find the position of the assignment operator
             size_t assignPos = x.find("=");
 

@@ -65,7 +65,7 @@ void parseInputFileLine(std::ifstream &fIn, std::ofstream &fOut,
 
     // Get the first word in order to determine
     // whether a loop starts in this line:
-    std::cout << std::endl << "#" << maxStatementId << ": " << fileLine << ". Parsing..." << std::endl;
+    std::cout << std::endl << "#" << maxStatementId << ": " << fileLine << ". Processing..." << std::endl;
 
     if (nonAlpha(fOut, fileLine, inMain, parallelize))
         return;
