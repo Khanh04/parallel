@@ -17,8 +17,25 @@ public:
     static std::set<std::string>* _dependsOnList;
     double get_variable_value(const std::string &varName);
     void set_symbol_value(const std::string &varName, double value);
+    const std::unordered_map<std::string, bool>& get_varReads() const { return varReads; }
+    const std::unordered_map<std::string, bool>& get_varWrites() const { return varWrites; }
+    void resetReadWriteTracking() {
+        varReads.clear();
+        varWrites.clear();
+    }
+
 
 private:
+    std::unordered_map<std::string, bool> varReads;
+    std::unordered_map<std::string, bool> varWrites;
+        // Helper functions for tracking reads and writes
+    void trackVarRead(const std::string &varName) {
+        varReads[varName] = true;
+    }
+    void trackVarWrite(const std::string &varName) {
+        varWrites[varName] = true;
+    }
+
     Lexer *p_lexer;
     double assign_expr();
     double add_expr();

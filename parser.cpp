@@ -27,9 +27,11 @@ Parser::Parser() {
     symbol_table["e"] = exp(1.0);
 }
 
+// Main parse function
 double Parser::operator()(const std::string &s) {
     std::istringstream ist{s};
     p_lexer = new Lexer{ist};
+    resetReadWriteTracking();  // Clear previous read/write info for a fresh parse
     double result = assign_expr();
     delete p_lexer;
     return result;
@@ -50,43 +52,41 @@ void Parser::set_symbol_value(const std::string &varName, double value) {
         throw std::runtime_error("Cannot update constant variable: " + varName);
     }
     symbol_table[varName] = value;
+    trackVarWrite(varName);  // Track the variable as written
 }
 
 double Parser::assign_expr() {
     Token t = p_lexer->get_current_token();
     std::string text = p_lexer->get_token_text();
-    // std::cout << "Text: " << text << std::endl;
     Parser::_lhsToken = "";
-    double result = add_expr();  // Evaluate the LHS expression
+    double result = add_expr();  // Evaluate LHS expression
     std::cout << "LHS: " << Parser::_lhsToken << std::endl;
 
-    // If the current token is an assignment, process the assignment
     if (p_lexer->get_current_token() == Token::Assign) {
         if (t != Token::Id) {
             throw std::runtime_error("Syntax error: target of assignment must be an identifier");
         }
 
         if (text == "pi" || text == "e") {
-            throw std::runtime_error("Syntax error: attempt to modify the constant " + text);
+            throw std::runtime_error("Syntax error: attempt to modify constant " + text);
         }
 
-        p_lexer->advance();  // Move past the assignment operator
-        
-        // Evaluate the RHS expression and assign it to the LHS variable
+        p_lexer->advance();  // Move past '='
         double rhs_value = add_expr();
 
-        // Handle cases like a = a + 1 by updating the symbol table
         if (symbol_table.find(text) != symbol_table.end()) {
             result = symbol_table[text] = rhs_value;
         } else {
-            // If LHS is not in the symbol table, treat it as a new variable
             symbol_table[text] = rhs_value;
             result = rhs_value;
         }
+
+        trackVarWrite(text);  // Track variable as written
     }
 
     return result;
 }
+
 
 double Parser::add_expr() {
     double result = mul_expr();
