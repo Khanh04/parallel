@@ -454,41 +454,40 @@ void parseLoopBody(const std::string &varName, int val1, int val2, bool incremen
 
     while ((increment && i < val2) || (!increment && i > val2)) {
         parser.set_symbol_value(varName, i);
-        for (std::string x : myvector) {
+        for (std::string statement : myvector) {
             maxStatementId++;
-            cout << "#" << maxStatementId << " " << x << endl;
+            cout << "#" << maxStatementId << " " << statement << endl;
             // Find the position of the assignment operator
-            size_t assignPos = x.find("=");
+            size_t assignPos = statement.find("=");
 
             // Replace occurrences of varName only in the right-hand side of the assignment
             if (assignPos != std::string::npos) {
-                std::string lhs = x.substr(0, assignPos + 1); // LHS including '='
-                std::string rhs = x.substr(assignPos + 1);    // RHS after '='
+                std::string lhs = statement.substr(0, assignPos + 1); // LHS including '='
+                std::string rhs = statement.substr(assignPos + 1);    // RHS after '='
 
                 // Replace varName in the RHS
                 rhs = std::regex_replace(rhs, std::regex("\\b" + varName + "\\b"), std::to_string(i));
 
                 // Reconstruct the line with the modified RHS
-                x = lhs + rhs;
+                statement = lhs + rhs;
             }
-            parse(x, dependsOnList); // Parse dependencies
+            parse(statement, dependsOnList, &parser); // Parse dependencies
 
-            // Check reads and writes
+            // Check loop-carried dependencies
             bool loopCarried = false;
             for (const auto &var : dependsOnList) {
-                if (varWrites[var]) {
-                    loopCarried = true; // Loop-carried dependence detected
+                if (parser.get_varWrites().count(var)) {
+                    loopCarried = true;  // Loop-carried dependence detected
                 }
-                varReads[var] = true;
-            }
+            }            
             updateGraph(maxStatementId, Parser::_lhsToken, dependsOnList); // Update dependency graph
 
             // Example of variable writing
-            if (x.find("=") != std::string::npos) {
-                std::string writtenVar = x.substr(0, x.find("="));
-                varWrites[writtenVar] = true;
-                if (varReads[writtenVar]) {
-                    loopCarried = true; // Loop-carried dependence detected
+            if (assignPos != std::string::npos) {
+                std::string writtenVar = statement.substr(0, assignPos);
+                parser.trackVarWrite(writtenVar);
+                if (parser.get_varReads().count(writtenVar)) {
+                    loopCarried = true;  // Loop-carried dependence detected
                 }
             }
 

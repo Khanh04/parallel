@@ -232,10 +232,12 @@ double Parser::primary() {
             double evaluatedIndex = evaluateExpression(evaluatedIndexExpr);
 
             std::string evaluatedArrayAccess = arrayName + "[" + std::to_string(static_cast<int>(evaluatedIndex)) + "]";
+            trackVarWrite(evaluatedArrayAccess);
             Parser::_dependsOnList->insert(evaluatedArrayAccess);
             return symbol_table[evaluatedArrayAccess];
         }
         case Token::Id:
+            trackVarRead(text);
             if (Parser::_lhsToken.empty()) {
                 Parser::_lhsToken = text;
                 p_lexer->advance();
@@ -365,17 +367,30 @@ double Parser::get_argument() {
     return arg;
 }
 
-void parse(const std::string &s, std::set<std::string> &dependsOnList) {
-    Parser parser;
+void parse(const std::string &s, std::set<std::string> &dependsOnList, Parser* parser) {
+    bool ownsParser = false;  // Track if we created a new Parser instance
+
+    if (!parser) {
+        parser = new Parser();  // Create a new instance if none is provided
+        ownsParser = true;      // Mark ownership to delete it later
+    }
+
+    // Set the dependency list for the parser instance
     Parser::_dependsOnList = &dependsOnList;
 
     try {
-        double result = parser(s);
-        // std::cout << "Result: " << result << std::endl;
+        parser->resetReadWriteTracking();  // Clear previous read/write info
+        double result = (*parser)(s);      // Use the provided or newly created parser
     } catch (const std::exception &e) {
         std::cerr << "Parsing error: " << e.what() << '\n';
     }
+
+    // Clean up if we created the parser instance
+    if (ownsParser) {
+        delete parser;
+    }
 }
+
 
 
 // Helper functions to check operator precedence and type

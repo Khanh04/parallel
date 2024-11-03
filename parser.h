@@ -23,18 +23,19 @@ public:
         varReads.clear();
         varWrites.clear();
     }
-
-
-private:
-    std::unordered_map<std::string, bool> varReads;
-    std::unordered_map<std::string, bool> varWrites;
-        // Helper functions for tracking reads and writes
     void trackVarRead(const std::string &varName) {
         varReads[varName] = true;
     }
     void trackVarWrite(const std::string &varName) {
         varWrites[varName] = true;
     }
+
+
+
+private:
+    std::unordered_map<std::string, bool> varReads;
+    std::unordered_map<std::string, bool> varWrites;
+        // Helper functions for tracking reads and writes
 
     Lexer *p_lexer;
     double assign_expr();
@@ -48,7 +49,7 @@ private:
     std::string handleBracketedExpression(const std::string& text);
 };
 
-void parse(const std::string &s, std::set<std::string> &dependsOnList);
+void parse(const std::string &s, std::set<std::string> &dependsOnList, Parser* parser = nullptr);
 
 // Symbol table to hold variable values
 extern std::map<std::string, double> symbol_table;
