@@ -4,18 +4,17 @@
 
 using namespace std;
 
-void updateGraph(const int maxStatementId, std::string lhsVar, std::set<std::string> &dependsOnList) {
+void updateGraph(const int maxStatementId, 
+                 std::string lhsVar, 
+                 std::set<std::string> &dependsOnList, 
+                 Parser* parser) {
     Variables &v = Variables::varSet[Variables::iCurrentVarSet];
     
-    // Debug output
-    // cout << "maxStatementId: " << maxStatementId << endl;
-    // cout << "lhsVar: " << lhsVar << endl;
-    // cout << "dependsOnList: ";
-    // for (const auto &var : dependsOnList) {
-    //     cout << var << " ";
-    // }
-    // cout << endl;
-    
+    // Track LHS variable write if parser is provided
+    if (parser) {
+        parser->trackVarWrite(lhsVar);
+    }
+
     // Find the LHS variable
     Var *lhs = v.findVar(lhsVar);
     if (!lhs) {
@@ -25,8 +24,15 @@ void updateGraph(const int maxStatementId, std::string lhsVar, std::set<std::str
         lhs->setWrite(maxStatementId);
     }
 
-    // Iterate over the set of dependencies
+    // Iterate over the set of dependencies (RHS variables)
     for (const auto &depVar : dependsOnList) {
+        // Track RHS variable read if parser is provided
+        if (parser) {
+            if (depVar != "PR") {
+            parser->trackVarRead(depVar);
+            }
+        }
+
         Var *rhs = v.findVar(depVar);
         if (!rhs) {
             Var temp(depVar);

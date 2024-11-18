@@ -52,7 +52,7 @@ void Parser::set_symbol_value(const std::string &varName, double value) {
         throw std::runtime_error("Cannot update constant variable: " + varName);
     }
     symbol_table[varName] = value;
-    trackVarWrite(varName);  // Track the variable as written
+    // trackVarWrite(varName);  // Track the variable as written
 }
 
 double Parser::assign_expr() {
@@ -60,12 +60,12 @@ double Parser::assign_expr() {
     std::string text = p_lexer->get_token_text();
     Parser::_lhsToken = "";
     double result = add_expr();  // Evaluate LHS expression
-    std::cout << "LHS: " << Parser::_lhsToken << std::endl;
+    // std::cout << "LHS: " << Parser::_lhsToken << std::endl;
 
     if (p_lexer->get_current_token() == Token::Assign) {
-        if (t != Token::Id) {
-            throw std::runtime_error("Syntax error: target of assignment must be an identifier");
-        }
+        // if (t != Token::Id || t != Token::Array) {
+        //     throw std::runtime_error("Syntax error: target of assignment must be an identifier");
+        // }
 
         if (text == "pi" || text == "e") {
             throw std::runtime_error("Syntax error: attempt to modify constant " + text);
@@ -81,7 +81,7 @@ double Parser::assign_expr() {
             result = rhs_value;
         }
 
-        trackVarWrite(text);  // Track variable as written
+        // trackVarWrite(text);  // Track variable as written
     }
 
     return result;
@@ -166,7 +166,7 @@ double Parser::primary() {
     switch (current_token) {
         case Token::Array:
         {            
-            std::cout << text << std::endl;
+            // std::cout << text << std::endl;
             size_t openBracket = text.find('[');
             size_t closeBracket = text.find(']');
             
@@ -232,12 +232,16 @@ double Parser::primary() {
             double evaluatedIndex = evaluateExpression(evaluatedIndexExpr);
 
             std::string evaluatedArrayAccess = arrayName + "[" + std::to_string(static_cast<int>(evaluatedIndex)) + "]";
-            trackVarWrite(evaluatedArrayAccess);
-            Parser::_dependsOnList->insert(evaluatedArrayAccess);
+            if (Parser::_lhsToken.empty()) {
+                Parser::_lhsToken = evaluatedArrayAccess;
+            } else {
+                Parser::_dependsOnList->insert(evaluatedArrayAccess);
+            }
+            p_lexer->advance();
             return symbol_table[evaluatedArrayAccess];
         }
         case Token::Id:
-            trackVarRead(text);
+            // trackVarRead(text);
             if (Parser::_lhsToken.empty()) {
                 Parser::_lhsToken = text;
                 p_lexer->advance();

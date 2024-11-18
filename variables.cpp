@@ -161,56 +161,32 @@ void Graph::print() {
 
 void Graph::printTable() {
     Variables &v = Variables::varSet[Variables::iCurrentVarSet];
-    vector<int> maxLengths(v.vars.size());
-
-    // Calculate the maximum length of each column (for headers and table body)
-    for (int i = 0; i < v.vars.size(); i++) {
-        maxLengths[i] = v.vars[i].nameLength();
-        for (int j = 0; j < v.vars.size(); j++) {
-            for (auto &dep : dependencies) {
-                if (dep == Dependency(v.vars[j], v.vars[i], 0)) {
-                    int length = dep.getStatementIdsString().length();
-                    if (length > maxLengths[j])  // Check for j, not i
-                        maxLengths[j] = length;  // Store max length for each column
-                }
-            }
-        }
-    }
 
     // Print the header row
     cout << "Dependency table:" << endl;
     cout << "     "; // Starting space for row labels
     for (int i = 0; i < v.vars.size(); i++) {
-        cout << v.vars[i];
-        int padding = maxLengths[i] - v.vars[i].nameLength() + 5; // Add extra padding
-        cout << string(padding, ' '); // Dynamic padding for variable names
+        cout << v.vars[i] << " "; // Just print variable names with a single space
     }
     cout << endl;
 
     // Print each row
     for (int i = 0; i < v.vars.size(); i++) {
-        cout << v.vars[i];
-        int padding = maxLengths[i] - v.vars[i].nameLength() + 5;
-        cout << string(padding, ' '); // Padding after row label
-
+        cout << v.vars[i] << " "; // Print the row label
         for (int j = 0; j < v.vars.size(); j++) {
             bool found = false;
             for (auto &dep : dependencies) {
                 if (dep == Dependency(v.vars[j], v.vars[i], 0)) {
-                    string statementIdsStr = dep.getStatementIdsString();
-                    cout << statementIdsStr;
-                    int spacePadding = maxLengths[j] - statementIdsStr.length() + 5;
-                    cout << string(spacePadding, ' '); // Align based on statement ID length
+                    cout << dep.getStatementIdsString() << " "; // Print dependency IDs
                     found = true;
                     break;
                 }
             }
             if (!found) {
-                cout << string(maxLengths[j] + 5, ' '); // If no dependency, just add space
+                cout << "- "; // Use "-" for no dependency
             }
         }
         cout << endl;
     }
     cout << endl;
 }
-

@@ -199,7 +199,7 @@ void parseFunctionOrVariableDefinition(Functions &f, std::string &functionName, 
     Lexer* p_lexer = new Lexer{ist};
     std::string type = p_lexer->get_token_text();
     p_lexer->advance();
-
+    Parser parser;
     bool isFunction = false;
     bool isVariable = false;
     bool firstVar = true;
@@ -232,8 +232,8 @@ void parseFunctionOrVariableDefinition(Functions &f, std::string &functionName, 
                     // Parse dependencies
                     std::set<std::string> dependsOnList;
                     std::string definitionLine = name + " = " + value;
-                    parse(definitionLine, dependsOnList);
-                    updateGraph(maxStatementId, Parser::_lhsToken, dependsOnList);
+                    parse(definitionLine, dependsOnList, &parser);
+                    updateGraph(maxStatementId, Parser::_lhsToken, dependsOnList, &parser);
                 }
                 if (word == ";") {
                     varStream << word;
@@ -288,10 +288,11 @@ void parseExpression(std::ofstream &fOut, std::string fileLine, const int maxSta
     cout << "Parsing expression " << fileLine << endl;
     if (PARALLELIZE)
         fOut << fileLine << endl;
-
+    Parser parser;
     std::set<std::string> dependsOnList;
-    parse(fileLine, dependsOnList);
-    updateGraph(maxStatementId, Parser::_lhsToken, dependsOnList);
+    parser._dependsOnList = &dependsOnList;
+    parse(fileLine, dependsOnList, &parser);
+    updateGraph(maxStatementId, Parser::_lhsToken, dependsOnList, &parser);
 }
 
 void parallelizeLoop(std::ifstream &fIn, std::ofstream &fOut, const std::string varName, const int val1, const int val2) {
@@ -448,14 +449,15 @@ bool overlap(const std::set<std::string>& s1, const std::set<std::string>& s2) {
 void parseLoopBody(const std::string &varName, int val1, int val2, bool increment, std::vector<std::string> &myvector, int &maxStatementId, std::unordered_map<std::string, bool> &varReads, std::unordered_map<std::string, bool> &varWrites) {
     cout << "Parsing loop body..."<< varName << val1 << val2 << endl;
     int i = val1;
-    std::set<std::string> dependsOnList;
     Parser parser;
+    std::set<std::string> dependsOnList;
     Parser::_dependsOnList = &dependsOnList;
 
     while ((increment && i < val2) || (!increment && i > val2)) {
         parser.set_symbol_value(varName, i);
         for (std::string statement : myvector) {
             maxStatementId++;
+            Parser::_dependsOnList->clear();
             cout << "#" << maxStatementId << " " << statement << endl;
             // Find the position of the assignment operator
             size_t assignPos = statement.find("=");
@@ -472,6 +474,7 @@ void parseLoopBody(const std::string &varName, int val1, int val2, bool incremen
                 statement = lhs + rhs;
             }
             parse(statement, dependsOnList, &parser); // Parse dependencies
+            updateGraph(maxStatementId, Parser::_lhsToken, dependsOnList, &parser); // Update dependency graph
 
             // Check loop-carried dependencies
             bool loopCarried = false;
@@ -479,22 +482,32 @@ void parseLoopBody(const std::string &varName, int val1, int val2, bool incremen
                 if (parser.get_varWrites().count(var)) {
                     loopCarried = true;  // Loop-carried dependence detected
                 }
-            }            
-            updateGraph(maxStatementId, Parser::_lhsToken, dependsOnList); // Update dependency graph
-
-            // Example of variable writing
-            if (assignPos != std::string::npos) {
-                std::string writtenVar = statement.substr(0, assignPos);
-                parser.trackVarWrite(writtenVar);
-                if (parser.get_varReads().count(writtenVar)) {
-                    loopCarried = true;  // Loop-carried dependence detected
-                }
             }
+            std::cout << "Variable writes: ";
+            for (const auto &var : parser.get_varWrites()) {
+                std::cout << var.first << " ";
+            }
+            std::cout << std::endl;
+
+            std::cout << "Variable reads: ";
+            for (const auto &var : parser.get_varReads()) {
+                std::cout << var.first << " ";
+            }
+            std::cout << std::endl;
+
+            // // Example of variable writing
+            // if (assignPos != std::string::npos) {
+            //     std::string writtenVar = statement.substr(0, assignPos);
+            //     parser.trackVarWrite(writtenVar);
+            //     if (parser.get_varReads().count(writtenVar)) {
+            //         loopCarried = true;  // Loop-carried dependence detected
+            //     }
+            // }
 
             if (loopCarried) {
                 std::cout << "Loop-carried dependence detected.\n";
             } else {
-                std::cout << "Loop-independent.\n";
+                // std::cout << "Loop-independent.\n";
             }
         }
         increment ? i++ : i--;
