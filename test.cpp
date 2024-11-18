@@ -17,7 +17,7 @@ int main(){
     for(i=1;i<5;++i){ 
         d=p+2;
         arr[i] = arr[i-1];
-        arr[i-1] = p + 1;
+        arr[i-1] = d + 1;
     }
     while (a < 10) {
         a=a+1;
