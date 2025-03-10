@@ -48,5 +48,8 @@ void updateGraph(const int maxStatementId,
         if (lhs && rhs) {
             Graph::graphs[Graph::iCurrentGraph].addDependency(*lhs, *rhs, maxStatementId);
         }
+        else {
+            std::cout << "Line #" << maxStatementId << " skipped: No dependency added.\n";
+        }
     }
 }

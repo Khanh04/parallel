@@ -192,7 +192,7 @@ bool parseFunctionCall(Functions &f, std::ofstream &fOut, std::string fileLine, 
     return isFunction;
 }
 
-void parseFunctionOrVariableDefinition(Functions &f, std::string &functionName, std::string fileLine, int maxStatementId, std::ifstream &fIn, std::ofstream &fOut, int parallelize) {
+void parseFunctionOrVariableDefinition(Functions &f, std::string &functionName, std::string fileLine, int maxStatementId, std::ifstream &fIn, std::ofstream &fOut, bool &in_main, int parallelize) {
     functionName = "";
 
     std::istringstream ist{fileLine};
@@ -278,6 +278,7 @@ void parseFunctionOrVariableDefinition(Functions &f, std::string &functionName, 
     MPI_Comm_size(MPI_COMM_WORLD, &nRanks);\n\
     ";
             }
+            in_main = true;
         }
     }
 

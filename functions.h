@@ -25,7 +25,7 @@ public:
 private:
 };
 
-void parseFunctionOrVariableDefinition(Functions &f, std::string &functionName, std::string fileLine, int maxStatementId, std::ifstream &fIn, std::ofstream &fOut, int parallelize);
+void parseFunctionOrVariableDefinition(Functions &f, std::string &functionName, std::string fileLine, int maxStatementId, std::ifstream &fIn, std::ofstream &fOut, bool &in_main, int parallelize);
 bool checkLoopDependency(int &loopMin, int &loopMax);
 void parseForLoop(std::string fileLine, int &maxStatementId, int &loopMin, int &loopMax, std::unordered_map<std::string, bool> &varReads, std::unordered_map<std::string, bool> &varWrites, std::ifstream &fIn, std::ofstream &fOut, int parallelize);
 void parseLoopBody(const std::string &varName, int val1, int val2, bool increment, std::vector<std::string> &myvector, int &maxStatementId, std::unordered_map<std::string, bool> &varReads, std::unordered_map<std::string, bool> &varWrites);
