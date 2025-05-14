@@ -110,11 +110,14 @@ public:
     std::vector<std::string> parameters;
     std::vector<Loop> loops;
     std::map<std::string, Variable> localVariables;
+    std::string returnType; // Added: Function return type
+    bool hasReturnValue;    // Added: Does this function return a value?
     
     // Default constructor needed for std::map
-    Function() : name(""), startLine(-1), endLine(-1) {}
+    Function() : name(""), startLine(-1), endLine(-1), returnType("void"), hasReturnValue(false) {}
     
-    Function(const std::string& n, int start) : name(n), startLine(start), endLine(-1) {}
+    Function(const std::string& n, int start, const std::string& retType = "void") 
+        : name(n), startLine(start), endLine(-1), returnType(retType), hasReturnValue(retType != "void") {}
 };
 
 // Code analyzer class to parse and analyze C++ code
@@ -153,6 +156,15 @@ private:
             return match[2].str();
         }
         return "";
+    }
+    
+    std::string extractFunctionReturnType(const std::string& line) {
+        std::regex returnType("\\b(void|int|float|double|char|long|short|bool|auto|std::string|std::vector(\\s*<[^>]*>)?)\\s+\\w+\\s*\\(");
+        std::smatch match;
+        if (std::regex_search(line, match, returnType) && match.size() > 1) {
+            return match[1].str();
+        }
+        return "void";
     }
     
     bool isForLoop(const std::string& line) {
@@ -209,7 +221,10 @@ private:
         std::set<std::string> keywords = {
             "if", "else", "for", "while", "do", "switch", "case", "break", 
             "continue", "return", "int", "float", "double", "char", "void", 
-            "bool", "auto", "const", "static", "struct", "class", "namespace"
+            "bool", "auto", "const", "static", "struct", "class", "namespace",
+            "MPI_Init", "MPI_Finalize", "MPI_Comm_rank", "MPI_Comm_size", "MPI_Barrier",
+            "MPI_Send", "MPI_Recv", "MPI_Bcast", "MPI_Reduce", "MPI_Allreduce", "MPI_Gather",
+            "MPI_Allgather", "MPI_Scatter"
         };
         
         while (it != end) {
@@ -253,6 +268,22 @@ public:
         return std::regex_search(line, varDecl);
     }
     
+    bool isReturnStatement(const std::string& line) const {
+        // Check for return statement
+        std::regex returnStmt("\\s*return\\s+.*;");
+        return std::regex_search(line, returnStmt);
+    }
+    
+    std::string extractReturnValue(const std::string& line) const {
+        // Extract return value from "return xyz;"
+        std::regex returnVal("return\\s+([^;]+);");
+        std::smatch match;
+        if (std::regex_search(line, match, returnVal) && match.size() > 1) {
+            return match[1].str();
+        }
+        return "";
+    }
+    
     CodeAnalyzer(const std::string& filename) {
         std::ifstream file(filename);
         std::string line;
@@ -293,11 +324,14 @@ public:
             // Check for function declarations
             else if (isFunctionDeclaration(line)) {
                 std::string funcName = extractFunctionName(line);
+                std::string returnType = extractFunctionReturnType(line);
                 
                 if (!funcName.empty()) {
                     currentFunction = &functions[funcName];
                     currentFunction->name = funcName;
                     currentFunction->startLine = currentLine;
+                    currentFunction->returnType = returnType;
+                    currentFunction->hasReturnValue = (returnType != "void");
                     
                     // Find closing brace of the function
                     int endLine = -1;
@@ -431,6 +465,16 @@ private:
     void addMPIHeaders() {
         result.push_back("#include <mpi.h>");
         result.push_back("#include <algorithm> // For std::min");
+        result.push_back("#include <iomanip>   // For std::setw in logging");
+        result.push_back("");
+        result.push_back("// Logging macro for MPI operations");
+        result.push_back("#define MPI_LOG(msg) \\");
+        result.push_back("    do { \\");
+        result.push_back("        int _rank; \\");
+        result.push_back("        MPI_Comm_rank(MPI_COMM_WORLD, &_rank); \\");
+        result.push_back("        std::cout << \"[MPI Process \" << std::setw(3) << _rank << \"] \" << msg << std::endl; \\");
+        result.push_back("    } while(0)");
+        result.push_back("");
     }
     
     void addMPIInit() {
@@ -439,12 +483,40 @@ private:
         result.push_back("    MPI_Init(&argc, &argv);");
         result.push_back("    MPI_Comm_rank(MPI_COMM_WORLD, &rank);");
         result.push_back("    MPI_Comm_size(MPI_COMM_WORLD, &size);");
+        result.push_back("    MPI_LOG(\"Initialized MPI with \" << size << \" processes\");");
         mpiInitialized = true;
     }
     
     void addMPIFinalize() {
+        result.push_back("    MPI_LOG(\"Finalizing MPI\");");
         result.push_back("    MPI_Finalize();");
         result.push_back("    return 0;");
+        result.push_back("}");
+    }
+    
+    void addMPIDatatype(const std::string& type) {
+        // Add MPI datatype helper
+        result.push_back("// Helper function to get MPI datatype for " + type);
+        result.push_back("MPI_Datatype getMPIDatatype_" + type + "() {");
+        
+        if (type == "int") {
+            result.push_back("    return MPI_INT;");
+        } else if (type == "float") {
+            result.push_back("    return MPI_FLOAT;");
+        } else if (type == "double") {
+            result.push_back("    return MPI_DOUBLE;");
+        } else if (type == "char") {
+            result.push_back("    return MPI_CHAR;");
+        } else if (type == "long") {
+            result.push_back("    return MPI_LONG;");
+        } else if (type == "bool") {
+            result.push_back("    return MPI_C_BOOL;");
+        } else {
+            // For complex types, return MPI_BYTE
+            result.push_back("    // Warning: Using MPI_BYTE for possibly complex type");
+            result.push_back("    return MPI_BYTE;");
+        }
+        
         result.push_back("}");
     }
     
@@ -492,6 +564,7 @@ private:
             result.push_back("    int remainder = total_iterations % size;");
             result.push_back("    int my_start = rank * chunk_size + loop_start + std::min(rank, remainder);");
             result.push_back("    int my_end = my_start + chunk_size + (rank < remainder ? 1 : 0);");
+            result.push_back("    MPI_LOG(\"Processing loop iterations from \" << my_start << \" to \" << my_end << \" (total: \" << my_end - my_start << \")\");");
             
             // Handle special case for incrementing variables
             for (const auto& [varName, increment] : incrementVars) {
@@ -516,6 +589,7 @@ private:
             for (const auto& [varName, increment] : incrementVars) {
                 result.push_back("    // Gather and distribute incremental changes to " + varName);
                 result.push_back("    int total_" + varName + " = 0;");
+                result.push_back("    MPI_LOG(\"Reducing variable " + varName + " = \" << " + varName + " << \" from all processes\");");
                 result.push_back("    MPI_Allreduce(&" + varName + ", &total_" + varName + ", 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);");
                 
                 // Reset the variable to its original value plus the total increment from all processes
@@ -523,11 +597,12 @@ private:
                 
                 // Add debugging
                 result.push_back("    if (rank == 0) {");
-                result.push_back("        std::cout << \"Total " + varName + " after parallelization: \" << " + varName + " << std::endl;");
+                result.push_back("        MPI_LOG(\"Total " + varName + " after parallelization: \" << " + varName + ");");
                 result.push_back("    }");
             }
             
             // Add barrier to ensure all processes are synchronized after the loop
+            result.push_back("    MPI_LOG(\"Waiting at barrier after loop\");");
             result.push_back("    MPI_Barrier(MPI_COMM_WORLD);");
             
         } else {
@@ -547,33 +622,137 @@ private:
             return;
         }
         
-        // Add function signature and opening brace
-        result.push_back(lines[function.startLine]);
+        // Check if function has a return value
+        bool hasReturnValue = function.hasReturnValue;
+        std::string returnType = function.returnType;
         
-        // Process function body
-        int currentLine = function.startLine + 1;
-        while (currentLine < function.endLine) {
-            bool processed = false;
+        // For functions with return values, create a wrapper
+        if (hasReturnValue) {
+            // Create parallel wrapper function
+            std::string wrapperName = function.name + "_mpi";
             
-            // Check if this line is the start of a loop
-            for (const auto& loop : function.loops) {
-                if (loop.startLine == currentLine) {
-                    processLoop(loop, function);
-                    currentLine = loop.endLine + 1;
-                    processed = true;
-                    break;
+            // Generate wrapper function
+            result.push_back(returnType + " " + wrapperName + "(");
+            
+            // Add parameters
+            std::string params;
+            for (size_t i = 0; i < function.parameters.size(); ++i) {
+                params += "int " + function.parameters[i];
+                if (i < function.parameters.size() - 1) {
+                    params += ", ";
+                }
+            }
+            result.push_back("    " + params + ") {");
+            
+            // Add MPI environment inside the wrapper
+            result.push_back("    int rank, size;");
+            result.push_back("    MPI_Comm_rank(MPI_COMM_WORLD, &rank);");
+            result.push_back("    MPI_Comm_size(MPI_COMM_WORLD, &size);");
+            result.push_back("    MPI_LOG(\"Entering " + wrapperName + "\");");
+            
+            // Process the function body
+            int currentLine = function.startLine + 1;
+            bool hasReturnStmt = false;
+            std::string returnValue;
+            
+            while (currentLine < function.endLine) {
+                bool processed = false;
+                
+                // Check if this line is a return statement
+                if (analyzer.isReturnStatement(lines[currentLine])) {
+                    returnValue = analyzer.extractReturnValue(lines[currentLine]);
+                    hasReturnStmt = true;
+                    // Don't process this line yet, will handle return values later
+                    currentLine++;
+                    continue;
+                }
+                
+                // Check if this line is the start of a loop
+                for (const auto& loop : function.loops) {
+                    if (loop.startLine == currentLine) {
+                        processLoop(loop, function);
+                        currentLine = loop.endLine + 1;
+                        processed = true;
+                        break;
+                    }
+                }
+                
+                if (!processed) {
+                    // Add line as is, with indentation
+                    result.push_back("    " + lines[currentLine]);
+                    currentLine++;
                 }
             }
             
-            if (!processed) {
-                // Add line as is
-                result.push_back(lines[currentLine]);
-                currentLine++;
+            // Handle return value if the function has one
+            if (hasReturnStmt && !returnValue.empty()) {
+                result.push_back("    // Gather return values from all processes");
+                result.push_back("    " + returnType + " local_result = " + returnValue + ";");
+                result.push_back("    " + returnType + " global_result;");
+                result.push_back("    MPI_LOG(\"Process \" << rank << \" computed local result: \" << local_result);");
+                
+                // Choose appropriate MPI reduction operation based on return type
+                std::string mpiOp = "MPI_SUM"; // default
+                if (returnType == "int" || returnType == "float" || returnType == "double" || returnType == "long") {
+                    result.push_back("    // Using MPI_Reduce with MPI_SUM for numeric return type");
+                } else {
+                    result.push_back("    // Warning: Using MPI_Reduce for possibly complex type");
+                    result.push_back("    // May need manual adjustment for proper reduction");
+                }
+                
+                // Add MPI reduction
+                result.push_back("    MPI_LOG(\"Reducing results from all processes\");");
+                result.push_back("    MPI_Reduce(&local_result, &global_result, 1, getMPIDatatype_" + returnType + "(), MPI_SUM, 0, MPI_COMM_WORLD);");
+                
+                // Broadcast result to all processes to ensure consistency
+                result.push_back("    // Broadcast result to all processes");
+                result.push_back("    MPI_Bcast(&global_result, 1, getMPIDatatype_" + returnType + "(), 0, MPI_COMM_WORLD);");
+                result.push_back("    MPI_LOG(\"Final reduced result: \" << global_result);");
+                result.push_back("    return global_result;");
+            } else if (hasReturnStmt) {
+                // No return value or void function with return
+                result.push_back("    return;");
             }
+            
+            result.push_back("}");
+            result.push_back("");
+            
+            // Now also add the original function for reference (commented out)
+            result.push_back("// Original function (for reference)");
+            for (int i = function.startLine; i <= function.endLine; ++i) {
+                result.push_back("// " + lines[i]);
+            }
+            result.push_back("");
+        } else {
+            // For void functions, add the function as is but with parallelized loops
+            // Add function signature and opening brace
+            result.push_back(lines[function.startLine]);
+            
+            // Process function body
+            int currentLine = function.startLine + 1;
+            while (currentLine < function.endLine) {
+                bool processed = false;
+                
+                // Check if this line is the start of a loop
+                for (const auto& loop : function.loops) {
+                    if (loop.startLine == currentLine) {
+                        processLoop(loop, function);
+                        currentLine = loop.endLine + 1;
+                        processed = true;
+                        break;
+                    }
+                }
+                
+                if (!processed) {
+                    // Add line as is
+                    result.push_back(lines[currentLine]);
+                    currentLine++;
+                }
+            }
+            
+            // Add closing brace
+            result.push_back(lines[function.endLine]);
         }
-        
-        // Add closing brace
-        result.push_back(lines[function.endLine]);
     }
 
 public:
@@ -616,7 +795,32 @@ public:
             }
         }
         
-        // Process each function
+        // Add MPI datatype helper functions for return types
+        std::set<std::string> returnTypes;
+        for (const auto& funcPair : analyzer.getFunctions()) {
+            const auto& function = funcPair.second;
+            if (function.hasReturnValue && function.returnType != "void") {
+                returnTypes.insert(function.returnType);
+            }
+        }
+        
+        // Add MPI datatype helper for each return type
+        for (const auto& type : returnTypes) {
+            addMPIDatatype(type);
+        }
+        
+        // Process each function (non-main first)
+        for (const auto& funcPair : analyzer.getFunctions()) {
+            const auto& name = funcPair.first;
+            const auto& function = funcPair.second;
+            
+            if (name != "main") {
+                // Process other functions
+                processFunction(function);
+            }
+        }
+        
+        // Process main function last
         for (const auto& funcPair : analyzer.getFunctions()) {
             const auto& name = funcPair.first;
             const auto& function = funcPair.second;
@@ -663,16 +867,39 @@ public:
                     }
                     
                     if (!processed) {
-                        // Add line as is, but with indentation
-                        result.push_back("    " + lines[currentLine]);
+                        // Check if this line calls a function with a return value
+                        // This is a simplified approach; a more robust parser would be needed
+                        for (const auto& funcPair : analyzer.getFunctions()) {
+                            const auto& calledName = funcPair.first;
+                            const auto& calledFunc = funcPair.second;
+                            
+                            if (calledName != "main" && calledFunc.hasReturnValue) {
+                                std::regex functionCall("\\b" + calledName + "\\s*\\(");
+                                if (std::regex_search(lines[currentLine], functionCall)) {
+                                    // Found a call to a function with return value, replace with MPI version
+                                    std::string originalLine = lines[currentLine];
+                                    std::string modifiedLine = std::regex_replace(originalLine, 
+                                                                                 std::regex("\\b" + calledName + "\\b"), 
+                                                                                 calledName + "_mpi");
+                                    
+                                    result.push_back("    // Original function call: " + originalLine);
+                                    result.push_back("    " + modifiedLine + " // Using MPI version");
+                                    
+                                    processed = true;
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        if (!processed) {
+                            // Add line as is, but with indentation
+                            result.push_back("    " + lines[currentLine]);
+                        }
                         currentLine++;
                     }
                 }
                 
                 addMPIFinalize();
-            } else {
-                // Process other functions
-                processFunction(function);
             }
         }
         
