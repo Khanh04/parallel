@@ -1,4 +1,4 @@
-// MPI Parallelizer with Automatic File Output
+// MPI Parallelizer with Parameter Independence Analysis
 
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
@@ -18,6 +18,7 @@
 #include <iostream>
 #include <sstream>
 #include <fstream>
+#include <map>
 
 using namespace clang;
 using namespace clang::tooling;
@@ -43,8 +44,25 @@ static cl::opt<bool> CompileAndRun("run",
     cl::desc("Automatically compile and run the generated code"),
     cl::cat(MPIToolCategory));
 
+// Removed --allow-params flag - now always analyzes parameters for safety
+
 // Global variables to store input filename for output generation
 std::string InputFileName;
+
+enum class ParameterType {
+    LITERAL,        // Literal values (1, 2.5, "hello")
+    CONSTANT,       // const variables or #define
+    INDEPENDENT,    // Independent local variables
+    SHARED_READONLY, // Shared but read-only variables
+    SHARED_MUTABLE  // Shared mutable variables (blocks parallelization)
+};
+
+struct ParameterInfo {
+    std::string name;
+    ParameterType type;
+    std::string sourceText;
+    bool isModified;
+};
 
 struct AutoCallInfo {
     CallExpr* expr;
@@ -53,23 +71,224 @@ struct AutoCallInfo {
     std::string sourceText;
     bool hasReturnType;
     bool hasParameters;
-    std::vector<std::string> parameterVars;
+    std::vector<ParameterInfo> parameters;
+    std::vector<std::string> parameterVars;  // Keep for backward compatibility
     int statementIndex;
     bool isAssignedToVariable;
+    bool canBeParallelized;
+    std::string parallelizationReason;
+    std::set<std::string> requiredVariables; // Variables that must be declared before this call
 };
 
-class VariableExtractor : public RecursiveASTVisitor<VariableExtractor> {
+class VariableAnalyzer : public RecursiveASTVisitor<VariableAnalyzer> {
 private:
-    std::vector<std::string>& variables;
+    ASTContext* context;
+    std::map<std::string, bool> variableModifications;
+    std::set<std::string> constVariables;
+    std::set<std::string> globalVariables;
+    std::map<std::string, VarDecl*> allVariables;
+    std::set<std::string> functionsModifyingGlobals;
 
 public:
-    VariableExtractor(std::vector<std::string>& vars) : variables(vars) {}
+    VariableAnalyzer(ASTContext* ctx) : context(ctx) {}
 
-    bool VisitDeclRefExpr(DeclRefExpr* expr) {
-        if (auto* varDecl = dyn_cast<VarDecl>(expr->getDecl())) {
-            variables.push_back(varDecl->getNameAsString());
+    bool VisitVarDecl(VarDecl* var) {
+        std::string varName = var->getNameAsString();
+        allVariables[varName] = var;
+        
+        // Check if it's a const variable
+        if (var->getType().isConstQualified()) {
+            constVariables.insert(varName);
+        }
+        
+        // Check if it's a global variable (file scope)
+        if (var->hasGlobalStorage() || var->isFileVarDecl()) {
+            globalVariables.insert(varName);
+        }
+        
+        return true;
+    }
+
+    bool VisitFunctionDecl(FunctionDecl* func) {
+        // Analyze function bodies to see if they modify global variables
+        if (func->hasBody()) {
+            GlobalModificationChecker checker(globalVariables);
+            checker.TraverseStmt(func->getBody());
+            if (checker.modifiesGlobal()) {
+                functionsModifyingGlobals.insert(func->getNameAsString());
+            }
         }
         return true;
+    }
+
+    bool VisitBinaryOperator(BinaryOperator* binOp) {
+        if (binOp->isAssignmentOp()) {
+            if (auto* declRef = dyn_cast<DeclRefExpr>(binOp->getLHS())) {
+                if (auto* varDecl = dyn_cast<VarDecl>(declRef->getDecl())) {
+                    std::string varName = varDecl->getNameAsString();
+                    variableModifications[varName] = true;
+                }
+            }
+        }
+        return true;
+    }
+
+    bool VisitUnaryOperator(UnaryOperator* unaryOp) {
+        if (unaryOp->isIncrementDecrementOp()) {
+            if (auto* declRef = dyn_cast<DeclRefExpr>(unaryOp->getSubExpr())) {
+                if (auto* varDecl = dyn_cast<VarDecl>(declRef->getDecl())) {
+                    std::string varName = varDecl->getNameAsString();
+                    variableModifications[varName] = true;
+                }
+            }
+        }
+        return true;
+    }
+
+    bool isVariableModified(const std::string& varName) const {
+        auto it = variableModifications.find(varName);
+        return it != variableModifications.end() && it->second;
+    }
+
+    bool isConstVariable(const std::string& varName) const {
+        return constVariables.find(varName) != constVariables.end();
+    }
+
+    bool isGlobalVariable(const std::string& varName) const {
+        return globalVariables.find(varName) != globalVariables.end();
+    }
+
+    bool functionModifiesGlobals(const std::string& funcName) const {
+        return functionsModifyingGlobals.find(funcName) != functionsModifyingGlobals.end();
+    }
+
+private:
+    class GlobalModificationChecker : public RecursiveASTVisitor<GlobalModificationChecker> {
+    private:
+        const std::set<std::string>& globals;
+        bool modifiesGlobalVar;
+
+    public:
+        GlobalModificationChecker(const std::set<std::string>& globalVars) 
+            : globals(globalVars), modifiesGlobalVar(false) {}
+
+        bool VisitBinaryOperator(BinaryOperator* binOp) {
+            if (binOp->isAssignmentOp()) {
+                if (auto* declRef = dyn_cast<DeclRefExpr>(binOp->getLHS())) {
+                    if (auto* varDecl = dyn_cast<VarDecl>(declRef->getDecl())) {
+                        std::string varName = varDecl->getNameAsString();
+                        if (globals.find(varName) != globals.end()) {
+                            modifiesGlobalVar = true;
+                        }
+                    }
+                }
+            }
+            return true;
+        }
+
+        bool VisitUnaryOperator(UnaryOperator* unaryOp) {
+            if (unaryOp->isIncrementDecrementOp()) {
+                if (auto* declRef = dyn_cast<DeclRefExpr>(unaryOp->getSubExpr())) {
+                    if (auto* varDecl = dyn_cast<VarDecl>(declRef->getDecl())) {
+                        std::string varName = varDecl->getNameAsString();
+                        if (globals.find(varName) != globals.end()) {
+                            modifiesGlobalVar = true;
+                        }
+                    }
+                }
+            }
+            return true;
+        }
+
+        bool modifiesGlobal() const { return modifiesGlobalVar; }
+    };
+};
+
+class ParameterExtractor : public RecursiveASTVisitor<ParameterExtractor> {
+private:
+    std::vector<ParameterInfo>& parameters;
+    VariableAnalyzer& analyzer;
+    ASTContext* context;
+    SourceManager& sourceManager;
+
+public:
+    ParameterExtractor(std::vector<ParameterInfo>& params, VariableAnalyzer& va, ASTContext* ctx) 
+        : parameters(params), analyzer(va), context(ctx), sourceManager(ctx->getSourceManager()) {}
+
+    bool VisitExpr(Expr* expr) {
+        // Handle different types of expressions
+        if (auto* intLit = dyn_cast<IntegerLiteral>(expr)) {
+            ParameterInfo info;
+            info.name = "literal_int";
+            info.type = ParameterType::LITERAL;
+            info.sourceText = std::to_string(intLit->getValue().getLimitedValue());
+            info.isModified = false;
+            parameters.push_back(info);
+            return false; // Don't traverse children
+        }
+        
+        if (auto* floatLit = dyn_cast<FloatingLiteral>(expr)) {
+            ParameterInfo info;
+            info.name = "literal_float";
+            info.type = ParameterType::LITERAL;
+            info.sourceText = std::to_string(floatLit->getValueAsApproximateDouble());
+            info.isModified = false;
+            parameters.push_back(info);
+            return false; // Don't traverse children
+        }
+        
+        if (auto* stringLit = dyn_cast<clang::StringLiteral>(expr)) {
+            ParameterInfo info;
+            info.name = "literal_string";
+            info.type = ParameterType::LITERAL;
+            info.sourceText = "\"" + stringLit->getString().str() + "\"";
+            info.isModified = false;
+            parameters.push_back(info);
+            return false; // Don't traverse children
+        }
+        
+        if (auto* declRef = dyn_cast<DeclRefExpr>(expr)) {
+            if (auto* varDecl = dyn_cast<VarDecl>(declRef->getDecl())) {
+                std::string varName = varDecl->getNameAsString();
+                
+                ParameterInfo info;
+                info.name = varName;
+                info.sourceText = varName;
+                info.isModified = analyzer.isVariableModified(varName);
+                
+                // Determine parameter type with better logic
+                if (analyzer.isConstVariable(varName)) {
+                    info.type = ParameterType::CONSTANT;
+                } else if (analyzer.isGlobalVariable(varName)) {
+                    info.type = info.isModified ? ParameterType::SHARED_MUTABLE : ParameterType::SHARED_READONLY;
+                } else {
+                    // Local variable - check if it's used elsewhere
+                    info.type = ParameterType::INDEPENDENT;
+                }
+                
+                parameters.push_back(info);
+                return false; // Don't traverse children
+            }
+        }
+        
+        return true; // Continue traversing for other expression types
+    }
+
+    // Keep these for backward compatibility, but they won't be called due to VisitExpr
+    bool VisitDeclRefExpr(DeclRefExpr* expr) {
+        return true; // Handled in VisitExpr
+    }
+
+    bool VisitIntegerLiteral(IntegerLiteral* literal) {
+        return true; // Handled in VisitExpr
+    }
+
+    bool VisitFloatingLiteral(FloatingLiteral* literal) {
+        return true; // Handled in VisitExpr
+    }
+
+    bool VisitStringLiteral(clang::StringLiteral* literal) {
+        return true; // Handled in VisitExpr
     }
 };
 
@@ -81,10 +300,12 @@ private:
     FunctionDecl* mainFunc;
     bool inMainFunction;
     int stmtCounter;
+    VariableAnalyzer analyzer;
+    std::map<std::string, int> variableDeclarationOrder; // Variable name -> statement index when declared
 
 public:
     AutoOutputMPIVisitor(ASTContext* ctx, Rewriter& r) 
-        : context(ctx), rewriter(r), mainFunc(nullptr), inMainFunction(false), stmtCounter(0) {}
+        : context(ctx), rewriter(r), mainFunc(nullptr), inMainFunction(false), stmtCounter(0), analyzer(ctx) {}
 
     bool VisitFunctionDecl(FunctionDecl* func) {
         if (func->getNameInfo().getName().getAsString() == "main") {
@@ -102,11 +323,31 @@ public:
             stmtCounter = 0;
         }
         
-        bool result = RecursiveASTVisitor::TraverseFunctionDecl(func);
+        bool result = RecursiveASTVisitor<AutoOutputMPIVisitor>::TraverseFunctionDecl(func);
         
         inMainFunction = wasInMain;
         stmtCounter = oldCounter;
         return result;
+    }
+
+    bool VisitDeclStmt(DeclStmt* declStmt) {
+        if (!inMainFunction) {
+            return true;
+        }
+
+        // Track variable declarations and their order
+        for (auto it = declStmt->decl_begin(); it != declStmt->decl_end(); ++it) {
+            if (auto* varDecl = dyn_cast<VarDecl>(*it)) {
+                std::string varName = varDecl->getNameAsString();
+                variableDeclarationOrder[varName] = stmtCounter;
+                
+                if (VerboseMode) {
+                    std::cerr << "  Variable declared: " << varName << " at statement " << stmtCounter << std::endl;
+                }
+            }
+        }
+        stmtCounter++;
+        return true;
     }
 
     bool VisitCallExpr(CallExpr* call) {
@@ -122,6 +363,7 @@ public:
                 funcName == "printf" || funcName == "cout" || funcName == "endl" ||
                 funcName.find("MPI_") != std::string::npos ||
                 funcName.find("std::") != std::string::npos) {
+                stmtCounter++;
                 return true;
             }
 
@@ -133,10 +375,12 @@ public:
             info.hasParameters = call->getNumArgs() > 0;
             info.statementIndex = stmtCounter++;
             info.isAssignedToVariable = false;
+            info.canBeParallelized = false;
             
             getCallSourceText(call, info.sourceText);
             analyzeParameters(call, info);
             checkAssignmentContext(call, info);
+            analyzeVariableDependencies(info);
             
             calls.push_back(info);
             
@@ -145,21 +389,40 @@ public:
                           << " (returns: " << (info.hasReturnType ? "yes" : "no") 
                           << ", params: " << (info.hasParameters ? "yes" : "no");
                 
-                if (!info.parameterVars.empty()) {
-                    std::cerr << ", uses vars: ";
-                    for (size_t i = 0; i < info.parameterVars.size(); ++i) {
-                        std::cerr << info.parameterVars[i];
-                        if (i < info.parameterVars.size() - 1) std::cerr << ", ";
+                if (!info.parameters.empty()) {
+                    std::cerr << ", param types: ";
+                    for (size_t i = 0; i < info.parameters.size(); ++i) {
+                        std::cerr << getParameterTypeString(info.parameters[i].type);
+                        if (i < info.parameters.size() - 1) std::cerr << ", ";
                     }
                 }
                 
-                if (info.isAssignedToVariable) {
-                    std::cerr << ", assigned to var";
+                if (!info.requiredVariables.empty()) {
+                    std::cerr << ", requires vars: ";
+                    for (auto it = info.requiredVariables.begin(); it != info.requiredVariables.end(); ++it) {
+                        std::cerr << *it;
+                        if (std::next(it) != info.requiredVariables.end()) std::cerr << ", ";
+                    }
                 }
                 
                 std::cerr << ")" << std::endl;
             }
+        } else {
+            stmtCounter++;
         }
+        return true;
+    }
+
+    bool VisitStmt(Stmt* stmt) {
+        if (!inMainFunction) {
+            return true;
+        }
+
+        // Handle statements that aren't function calls or declarations
+        if (!isa<CallExpr>(stmt) && !isa<DeclStmt>(stmt) && !isa<CompoundStmt>(stmt)) {
+            stmtCounter++;
+        }
+        
         return true;
     }
 
@@ -171,8 +434,22 @@ public:
             return;
         }
 
+        // First pass: analyze all variables and functions in the entire translation unit
+        analyzer.TraverseDecl(context->getTranslationUnitDecl());
+
+        // Second pass: re-analyze calls with updated variable information
+        for (auto& call : calls) {
+            determineParallelizability(call);
+            
+            if (VerboseMode) {
+                std::cerr << "  " << call.functionName << ": " 
+                          << (call.canBeParallelized ? "PARALLELIZABLE" : "NOT_PARALLELIZABLE")
+                          << " (" << call.parallelizationReason << ")" << std::endl;
+            }
+        }
+
         if (!SilentMode) {
-            std::cerr << "Analyzing " << calls.size() << " function calls for parallelization..." << std::endl;
+            std::cerr << "Analyzing " << calls.size() << " function calls for parallelization (with intelligent parameter analysis)..." << std::endl;
         }
 
         auto groups = createGroups();
@@ -205,6 +482,17 @@ public:
     }
 
 private:
+    std::string getParameterTypeString(ParameterType type) {
+        switch (type) {
+            case ParameterType::LITERAL: return "LITERAL";
+            case ParameterType::CONSTANT: return "CONSTANT";
+            case ParameterType::INDEPENDENT: return "INDEPENDENT";
+            case ParameterType::SHARED_READONLY: return "SHARED_RO";
+            case ParameterType::SHARED_MUTABLE: return "SHARED_MUT";
+            default: return "UNKNOWN";
+        }
+    }
+
     void getCallSourceText(CallExpr* call, std::string& text) {
         SourceManager& sm = context->getSourceManager();
         SourceLocation start = call->getBeginLoc();
@@ -229,10 +517,41 @@ private:
     }
 
     void analyzeParameters(CallExpr* call, AutoCallInfo& info) {
+        // Clear previous analysis
+        info.parameters.clear();
+        info.parameterVars.clear();
+        
+        if (VerboseMode) {
+            std::cerr << "  Analyzing parameters for " << info.functionName << " with " << call->getNumArgs() << " args" << std::endl;
+        }
+        
         for (unsigned i = 0; i < call->getNumArgs(); ++i) {
             Expr* arg = call->getArg(i);
-            VariableExtractor extractor(info.parameterVars);
+            
+            // Extract parameter information
+            std::vector<ParameterInfo> argParams;
+            ParameterExtractor extractor(argParams, analyzer, context);
             extractor.TraverseStmt(arg);
+            
+            if (VerboseMode) {
+                std::cerr << "    Arg " << i << " produced " << argParams.size() << " parameters" << std::endl;
+            }
+            
+            // Merge into main parameter list
+            for (const auto& param : argParams) {
+                info.parameters.push_back(param);
+                if (param.type != ParameterType::LITERAL) {
+                    info.parameterVars.push_back(param.name);
+                }
+                
+                if (VerboseMode) {
+                    std::cerr << "      " << param.name << " (" << getParameterTypeString(param.type) << "): " << param.sourceText << std::endl;
+                }
+            }
+        }
+        
+        if (VerboseMode) {
+            std::cerr << "  Total parameters for " << info.functionName << ": " << info.parameters.size() << std::endl;
         }
     }
 
@@ -261,6 +580,71 @@ private:
         }
     }
 
+    void analyzeVariableDependencies(AutoCallInfo& info) {
+        // Track which variables this function call depends on
+        for (const auto& param : info.parameters) {
+            if (param.type == ParameterType::INDEPENDENT) {
+                info.requiredVariables.insert(param.name);
+            }
+        }
+    }
+
+    void determineParallelizability(AutoCallInfo& info) {
+        // Check basic conditions
+        if (info.hasReturnType) {
+            info.canBeParallelized = false;
+            info.parallelizationReason = "has return type";
+            return;
+        }
+
+        if (info.isAssignedToVariable) {
+            info.canBeParallelized = false;
+            info.parallelizationReason = "assigned to variable";
+            return;
+        }
+
+        // Check if function modifies global state
+        if (analyzer.functionModifiesGlobals(info.functionName)) {
+            info.canBeParallelized = false;
+            info.parallelizationReason = "function modifies global variables";
+            return;
+        }
+
+        // Check variable dependencies - ensure all required variables are declared before this call
+        for (const auto& varName : info.requiredVariables) {
+            auto it = variableDeclarationOrder.find(varName);
+            if (it == variableDeclarationOrder.end()) {
+                info.canBeParallelized = false;
+                info.parallelizationReason = "uses undeclared variable: " + varName;
+                return;
+            }
+            if (it->second >= info.statementIndex) {
+                info.canBeParallelized = false;
+                info.parallelizationReason = "uses variable declared after call: " + varName;
+                return;
+            }
+        }
+
+        // Analyze parameter safety (always enabled now)
+        if (info.hasParameters) {
+            for (const auto& param : info.parameters) {
+                if (param.type == ParameterType::SHARED_MUTABLE) {
+                    info.canBeParallelized = false;
+                    info.parallelizationReason = "uses shared mutable variable: " + param.name;
+                    return;
+                }
+            }
+        }
+
+        // If we get here, the function can be parallelized
+        info.canBeParallelized = true;
+        if (info.hasParameters) {
+            info.parallelizationReason = "safe for parallelization (independent parameters)";
+        } else {
+            info.parallelizationReason = "safe for parallelization (no parameters)";
+        }
+    }
+
     std::vector<std::vector<AutoCallInfo>> createGroups() {
         std::vector<std::vector<AutoCallInfo>> groups;
         std::vector<bool> processed(calls.size(), false);
@@ -268,7 +652,7 @@ private:
         for (size_t i = 0; i < calls.size(); ++i) {
             if (processed[i]) continue;
 
-            if (!canBeParallelized(calls[i])) {
+            if (!calls[i].canBeParallelized) {
                 processed[i] = true;
                 continue;
             }
@@ -280,7 +664,7 @@ private:
             for (size_t j = i + 1; j < calls.size(); ++j) {
                 if (processed[j]) continue;
                 
-                if (!canBeParallelized(calls[j])) {
+                if (!calls[j].canBeParallelized) {
                     break;
                 }
 
@@ -308,39 +692,52 @@ private:
         return groups;
     }
 
-    bool canBeParallelized(const AutoCallInfo& call) {
-        if (call.hasReturnType) {
-            if (VerboseMode) {
-                std::cerr << "  " << call.functionName << " cannot be parallelized: has return type" << std::endl;
-            }
-            return false;
-        }
-
-        if (call.hasParameters) {
-            if (VerboseMode) {
-                std::cerr << "  " << call.functionName << " cannot be parallelized: has parameters" << std::endl;
-            }
-            return false;
-        }
-
-        if (call.isAssignedToVariable) {
-            if (VerboseMode) {
-                std::cerr << "  " << call.functionName << " cannot be parallelized: assigned to variable" << std::endl;
-            }
-            return false;
-        }
-
-        return true;
-    }
-
     bool hasConflict(const AutoCallInfo& call1, const AutoCallInfo& call2) {
-        for (const std::string& var1 : call1.parameterVars) {
-            for (const std::string& var2 : call2.parameterVars) {
-                if (var1 == var2) {
+        // Check for shared mutable variables
+        for (const auto& param1 : call1.parameters) {
+            if (param1.type == ParameterType::SHARED_MUTABLE) {
+                for (const auto& param2 : call2.parameters) {
+                    if (param2.name == param1.name) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Check for same independent variables being used (potential conflict)
+        std::set<std::string> vars1, vars2;
+        for (const auto& param : call1.parameters) {
+            if (param.type == ParameterType::INDEPENDENT) {
+                vars1.insert(param.name);
+            }
+        }
+        for (const auto& param : call2.parameters) {
+            if (param.type == ParameterType::INDEPENDENT) {
+                vars2.insert(param.name);
+            }
+        }
+        
+        // Check for intersection
+        for (const auto& var : vars1) {
+            if (vars2.find(var) != vars2.end()) {
+                return true; // Same variable used in both calls
+            }
+        }
+
+        // Check variable declaration dependencies
+        // If call2 depends on variables that are declared between call1 and call2,
+        // they cannot be in the same parallel group
+        for (const auto& varName : call2.requiredVariables) {
+            auto it = variableDeclarationOrder.find(varName);
+            if (it != variableDeclarationOrder.end()) {
+                int declOrder = it->second;
+                // If variable is declared after call1 but before call2, there's a dependency
+                if (declOrder > call1.statementIndex && declOrder < call2.statementIndex) {
                     return true;
                 }
             }
         }
+
         return false;
     }
 
@@ -349,19 +746,31 @@ private:
         for (const auto& call : calls) {
             std::cerr << "  " << call.functionName << ": ";
             
-            std::vector<std::string> reasons;
-            if (call.hasReturnType) reasons.push_back("HAS_RETURN");
-            if (call.hasParameters) reasons.push_back("HAS_PARAMS");
-            if (call.isAssignedToVariable) reasons.push_back("ASSIGNED_TO_VAR");
-            
-            if (reasons.empty()) {
-                std::cerr << "PARALLELIZABLE";
+            if (call.canBeParallelized) {
+                std::cerr << "PARALLELIZABLE (" << call.parallelizationReason << ")";
             } else {
-                for (size_t i = 0; i < reasons.size(); ++i) {
-                    std::cerr << reasons[i];
-                    if (i < reasons.size() - 1) std::cerr << " ";
-                }
+                std::cerr << "NOT_PARALLELIZABLE (" << call.parallelizationReason << ")";
             }
+            
+            if (!call.parameters.empty()) {
+                std::cerr << " [params: ";
+                for (size_t i = 0; i < call.parameters.size(); ++i) {
+                    std::cerr << call.parameters[i].name << ":" << getParameterTypeString(call.parameters[i].type);
+                    if (i < call.parameters.size() - 1) std::cerr << ", ";
+                }
+                std::cerr << "]";
+            }
+            
+            if (!call.requiredVariables.empty()) {
+                std::cerr << " [requires: ";
+                for (auto it = call.requiredVariables.begin(); it != call.requiredVariables.end(); ++it) {
+                    auto declIt = variableDeclarationOrder.find(*it);
+                    std::cerr << *it << "@" << (declIt != variableDeclarationOrder.end() ? std::to_string(declIt->second) : "?");
+                    if (std::next(it) != call.requiredVariables.end()) std::cerr << ", ";
+                }
+                std::cerr << "] [call@" << call.statementIndex << "]";
+            }
+            
             std::cerr << std::endl;
         }
     }
@@ -415,6 +824,7 @@ private:
             rewriter.InsertText(bodyEnd, mpiFinalize);
         }
     }
+    
     void transformSingleGroup(const std::vector<AutoCallInfo>& group, size_t groupIdx) {
         if (group.empty()) return;
 
