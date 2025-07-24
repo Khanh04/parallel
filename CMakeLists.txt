@@ -26,8 +26,27 @@ target_link_libraries(mpi-parallelizer
     clangRewrite
 )
 
-# Link against LLVM libraries
-target_link_libraries(mpi-parallelizer ${LLVM_AVAILABLE_LIBS})
+# Get the specific LLVM libraries we need (excluding MLIR)
+llvm_map_components_to_libnames(llvm_libs 
+    support 
+    core 
+    irreader 
+    analysis 
+    transformutils 
+    instcombine 
+    scalaropts 
+    objcarcopts 
+    ipo 
+    vectorize 
+    option
+    mcparser
+    mc
+    bitwriter
+    bitreader
+)
+
+# Link against specific LLVM libraries
+target_link_libraries(mpi-parallelizer ${llvm_libs})
 
 # Set C++ standard to C++17 (required for modern LLVM)
 set_target_properties(mpi-parallelizer PROPERTIES
