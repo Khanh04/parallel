@@ -34,15 +34,29 @@ struct FunctionCall {
     unsigned lineNumber;
     bool hasReturnValue;
     std::string returnVariable;
-    std::string returnType;  // Added to track return type
+    std::string returnType;
+    std::vector<std::string> parameterVariables; // Variables passed as parameters
+    std::set<std::string> usedLocalVariables;    // Local variables used in this call
+};
+
+// Structure to hold local variable information
+struct LocalVariable {
+    std::string name;
+    std::string type;
+    int definedAtCall;        // Index of call that defines this variable (-1 if not from function call)
+    std::set<int> usedInCalls; // Indices of calls that use this variable
+    bool isParameter;         // True if this variable is passed as parameter to functions
 };
 
 // Structure to hold function analysis results
 struct FunctionAnalysis {
     std::set<std::string> readSet;
     std::set<std::string> writeSet;
+    std::set<std::string> localReads;  // Local variables read by this function
+    std::set<std::string> localWrites; // Local variables written by this function
     bool isParallelizable = true;
-    std::string returnType;  // Added to track return type
+    std::string returnType;
+    std::vector<std::string> parameterTypes; // Types of function parameters
 };
 
 // Structure for dependency graph node
@@ -51,6 +65,7 @@ struct DependencyNode {
     int callIndex;
     std::set<int> dependencies;  // indices of calls this depends on
     std::set<int> dependents;    // indices of calls that depend on this
+    std::string dependencyReason; // Why this dependency exists
 };
 
 class GlobalVariableCollector : public RecursiveASTVisitor<GlobalVariableCollector> {
@@ -72,6 +87,7 @@ public:
 class FunctionAnalyzer : public RecursiveASTVisitor<FunctionAnalyzer> {
 private:
     std::string currentFunction;
+    std::set<std::string> currentFunctionParams;
     
 public:
     std::set<std::string> globalVars;
@@ -90,11 +106,21 @@ public:
         if (FD->hasBody()) {
             currentFunction = FD->getNameAsString();
             functionAnalysis[currentFunction] = FunctionAnalysis();
+            currentFunctionParams.clear();
             
             // Extract return type information
             QualType returnQType = FD->getReturnType();
             std::string returnTypeStr = returnQType.getAsString();
             functionAnalysis[currentFunction].returnType = returnTypeStr;
+            
+            // Extract parameter information
+            for (unsigned i = 0; i < FD->getNumParams(); ++i) {
+                ParmVarDecl *param = FD->getParamDecl(i);
+                std::string paramName = param->getNameAsString();
+                std::string paramType = param->getType().getAsString();
+                currentFunctionParams.insert(paramName);
+                functionAnalysis[currentFunction].parameterTypes.push_back(paramType);
+            }
             
             // Extract the full function definition
             if (SM && currentFunction != "main") {
@@ -113,6 +139,9 @@ public:
             std::string varName = VD->getNameAsString();
             if (globalVars.count(varName)) {
                 functionAnalysis[currentFunction].readSet.insert(varName);
+            } else if (VD->hasLocalStorage() && !currentFunctionParams.count(varName)) {
+                // Local variable (not parameter)
+                functionAnalysis[currentFunction].localReads.insert(varName);
             }
         }
         return true;
@@ -125,6 +154,9 @@ public:
                     std::string varName = VD->getNameAsString();
                     if (globalVars.count(varName)) {
                         functionAnalysis[currentFunction].writeSet.insert(varName);
+                    } else if (VD->hasLocalStorage() && !currentFunctionParams.count(varName)) {
+                        // Local variable (not parameter)
+                        functionAnalysis[currentFunction].localWrites.insert(varName);
                     }
                 }
             }
@@ -139,6 +171,9 @@ public:
                     std::string varName = VD->getNameAsString();
                     if (globalVars.count(varName)) {
                         functionAnalysis[currentFunction].writeSet.insert(varName);
+                    } else if (VD->hasLocalStorage() && !currentFunctionParams.count(varName)) {
+                        // Local variable (not parameter)
+                        functionAnalysis[currentFunction].localWrites.insert(varName);
                     }
                 }
             }
@@ -159,9 +194,8 @@ public:
     std::vector<FunctionCall> functionCalls;
     std::string mainFunctionBody;
     SourceManager *SM;
-    std::map<std::string, int> variableToCallIndex; // variable name -> call index that produces it
-    std::vector<std::set<std::string>> callDependsOnVars; // each call's input variables
-    std::map<std::string, FunctionAnalysis>* functionAnalysisPtr; // Pointer to function analysis
+    std::map<std::string, LocalVariable> localVariables; // Track all local variables in main
+    std::map<std::string, FunctionAnalysis>* functionAnalysisPtr;
     
     MainFunctionExtractor(SourceManager *sourceManager) : SM(sourceManager), functionAnalysisPtr(nullptr) {}
     
@@ -173,10 +207,16 @@ public:
         if (FD->getNameAsString() == "main" && FD->hasBody()) {
             CompoundStmt *body = dyn_cast<CompoundStmt>(FD->getBody());
             if (body) {
-                // Process statements in order to track dependencies
+                // First pass: collect all local variable declarations
+                collectLocalVariables(body);
+                
+                // Second pass: process statements to build function calls and dependencies
                 for (auto *stmt : body->body()) {
                     processStatement(stmt);
                 }
+                
+                // Third pass: analyze local variable dependencies
+                analyzeLocalDependencies();
                 
                 // Extract the main function body text
                 SourceRange bodyRange = body->getSourceRange();
@@ -187,6 +227,36 @@ public:
     }
     
 private:
+    void collectLocalVariables(CompoundStmt *body) {
+        for (auto *stmt : body->body()) {
+            collectLocalVariablesInStmt(stmt);
+        }
+    }
+    
+    void collectLocalVariablesInStmt(Stmt *stmt) {
+        if (DeclStmt *DS = dyn_cast<DeclStmt>(stmt)) {
+            for (auto *D : DS->decls()) {
+                if (VarDecl *VD = dyn_cast<VarDecl>(D)) {
+                    LocalVariable localVar;
+                    localVar.name = VD->getNameAsString();
+                    localVar.type = VD->getType().getAsString();
+                    localVar.definedAtCall = -1; // Will be updated if defined by function call
+                    localVar.isParameter = false;
+                    localVariables[localVar.name] = localVar;
+                }
+            }
+        } else {
+            // Recursively check compound statements
+            for (auto *child : stmt->children()) {
+                if (child) {
+                    if (CompoundStmt *compound = dyn_cast<CompoundStmt>(child)) {
+                        collectLocalVariablesInStmt(compound);
+                    }
+                }
+            }
+        }
+    }
+    
     void processStatement(Stmt *stmt) {
         if (DeclStmt *DS = dyn_cast<DeclStmt>(stmt)) {
             // Handle variable declarations with function call initializers
@@ -209,18 +279,24 @@ private:
                                     if (functionAnalysisPtr && functionAnalysisPtr->count(funcName)) {
                                         call.returnType = (*functionAnalysisPtr)[funcName].returnType;
                                     } else {
-                                        // Fallback: get from variable declaration
                                         call.returnType = VD->getType().getAsString();
                                     }
                                     
                                     // Find variables used as parameters
-                                    std::set<std::string> usedVars;
                                     for (unsigned i = 0; i < CE->getNumArgs(); ++i) {
-                                        findUsedVariables(CE->getArg(i), usedVars);
+                                        std::set<std::string> argVars;
+                                        findUsedVariables(CE->getArg(i), argVars);
+                                        for (const std::string& var : argVars) {
+                                            call.parameterVariables.push_back(var);
+                                            call.usedLocalVariables.insert(var);
+                                        }
                                     }
                                     
-                                    callDependsOnVars.push_back(usedVars);
-                                    variableToCallIndex[call.returnVariable] = functionCalls.size();
+                                    // Update local variable tracking
+                                    if (localVariables.count(call.returnVariable)) {
+                                        localVariables[call.returnVariable].definedAtCall = functionCalls.size();
+                                    }
+                                    
                                     functionCalls.push_back(call);
                                 }
                             }
@@ -252,12 +328,15 @@ private:
                     }
                     
                     // Find variables used as parameters
-                    std::set<std::string> usedVars;
                     for (unsigned i = 0; i < CE->getNumArgs(); ++i) {
-                        findUsedVariables(CE->getArg(i), usedVars);
+                        std::set<std::string> argVars;
+                        findUsedVariables(CE->getArg(i), argVars);
+                        for (const std::string& var : argVars) {
+                            call.parameterVariables.push_back(var);
+                            call.usedLocalVariables.insert(var);
+                        }
                     }
                     
-                    callDependsOnVars.push_back(usedVars);
                     functionCalls.push_back(call);
                 }
             }
@@ -266,6 +345,26 @@ private:
             for (auto *child : stmt->children()) {
                 if (child) {
                     processStatement(child);
+                }
+            }
+        }
+    }
+    
+    void analyzeLocalDependencies() {
+        // For each function call, mark which local variables it uses
+        for (int i = 0; i < functionCalls.size(); ++i) {
+            for (const std::string& usedVar : functionCalls[i].usedLocalVariables) {
+                if (localVariables.count(usedVar)) {
+                    localVariables[usedVar].usedInCalls.insert(i);
+                }
+            }
+        }
+        
+        // Mark variables passed as parameters
+        for (int i = 0; i < functionCalls.size(); ++i) {
+            for (const std::string& paramVar : functionCalls[i].parameterVariables) {
+                if (localVariables.count(paramVar)) {
+                    localVariables[paramVar].isParameter = true;
                 }
             }
         }
@@ -302,6 +401,12 @@ private:
         return std::string(Lexer::getSourceText(
             CharSourceRange::getTokenRange(range), *SM, LangOptions()));
     }
+    
+public:
+    // Getter for local variables (for debugging)
+    const std::map<std::string, LocalVariable>& getLocalVariables() const {
+        return localVariables;
+    }
 };
 
 class MPIParallelizer {
@@ -309,8 +414,7 @@ private:
     std::vector<FunctionCall> functionCalls;
     std::map<std::string, FunctionAnalysis> functionAnalysis;
     std::vector<DependencyNode> dependencyGraph;
-    std::map<std::string, int> variableToCallIndex;
-    std::vector<std::set<std::string>> callDependsOnVars;
+    std::map<std::string, LocalVariable> localVariables;
     std::map<std::string, std::string> functionDefinitions;
     
     // Helper function to normalize type names
@@ -352,12 +456,10 @@ private:
 public:
     MPIParallelizer(const std::vector<FunctionCall>& calls, 
                    const std::map<std::string, FunctionAnalysis>& analysis,
-                   const std::map<std::string, int>& varToCall,
-                   const std::vector<std::set<std::string>>& callDeps,
+                   const std::map<std::string, LocalVariable>& localVars,
                    const std::map<std::string, std::string>& funcDefs)
         : functionCalls(calls), functionAnalysis(analysis), 
-          variableToCallIndex(varToCall), callDependsOnVars(callDeps),
-          functionDefinitions(funcDefs) {
+          localVariables(localVars), functionDefinitions(funcDefs) {
         buildDependencyGraph();
     }
     
@@ -372,35 +474,33 @@ public:
             dependencyGraph.push_back(node);
         }
         
-        // Build dependencies based on data flow
+        // Build dependencies based on local variable data flow
         for (int i = 0; i < functionCalls.size(); ++i) {
-            if (i < callDependsOnVars.size()) {
-                // Check if this call depends on variables produced by earlier calls
-                for (const std::string& usedVar : callDependsOnVars[i]) {
-                    if (variableToCallIndex.count(usedVar)) {
-                        int producerIndex = variableToCallIndex[usedVar];
-                        if (producerIndex < i) { // Ensure temporal ordering
-                            dependencyGraph[i].dependencies.insert(producerIndex);
-                            dependencyGraph[producerIndex].dependents.insert(i);
-                        }
+            for (int j = i + 1; j < functionCalls.size(); ++j) {
+                std::string reason = "";
+                bool hasDependency = false;
+                
+                // Check if call j uses a variable defined by call i
+                if (functionCalls[i].hasReturnValue && !functionCalls[i].returnVariable.empty()) {
+                    const std::string& producedVar = functionCalls[i].returnVariable;
+                    if (functionCalls[j].usedLocalVariables.count(producedVar)) {
+                        hasDependency = true;
+                        reason = "Local variable data flow: " + producedVar;
                     }
                 }
-            }
-            
-            // Also check global variable dependencies
-            for (int j = i + 1; j < functionCalls.size(); ++j) {
-                if (functionAnalysis.count(functionCalls[i].functionName) && 
+                
+                // Check for global variable dependencies
+                if (!hasDependency && functionAnalysis.count(functionCalls[i].functionName) && 
                     functionAnalysis.count(functionCalls[j].functionName)) {
                     
                     const auto& analysisA = functionAnalysis[functionCalls[i].functionName];
                     const auto& analysisB = functionAnalysis[functionCalls[j].functionName];
                     
-                    bool hasDependency = false;
-                    
                     // WAR: A writes, B reads
                     for (const auto& writeVar : analysisA.writeSet) {
                         if (analysisB.readSet.count(writeVar)) {
                             hasDependency = true;
+                            reason = "Global variable WAR: " + writeVar;
                             break;
                         }
                     }
@@ -410,6 +510,7 @@ public:
                         for (const auto& writeVar : analysisA.writeSet) {
                             if (analysisB.writeSet.count(writeVar)) {
                                 hasDependency = true;
+                                reason = "Global variable WAW: " + writeVar;
                                 break;
                             }
                         }
@@ -420,14 +521,20 @@ public:
                         for (const auto& readVar : analysisA.readSet) {
                             if (analysisB.writeSet.count(readVar)) {
                                 hasDependency = true;
+                                reason = "Global variable RAW: " + readVar;
                                 break;
                             }
                         }
                     }
-                    
-                    if (hasDependency) {
-                        dependencyGraph[j].dependencies.insert(i);
-                        dependencyGraph[i].dependents.insert(j);
+                }
+                
+                if (hasDependency) {
+                    dependencyGraph[j].dependencies.insert(i);
+                    dependencyGraph[i].dependents.insert(j);
+                    if (dependencyGraph[j].dependencyReason.empty()) {
+                        dependencyGraph[j].dependencyReason = reason;
+                    } else {
+                        dependencyGraph[j].dependencyReason += "; " + reason;
                     }
                 }
             }
@@ -474,8 +581,7 @@ public:
                 continue;
             }
             
-            // Then, process producer nodes one at a time (they can't be parallelized
-            // with each other because they each have dependents)
+            // Then, process producer nodes one at a time
             if (!producerNodes.empty()) {
                 std::vector<int> singleProducer = {producerNodes[0]};
                 groups.push_back(singleProducer);
@@ -497,6 +603,11 @@ public:
     // Public method to access dependency graph for debugging
     const std::vector<DependencyNode>& getDependencyGraph() const {
         return dependencyGraph;
+    }
+    
+    // Public method to access local variables for debugging
+    const std::map<std::string, LocalVariable>& getLocalVariables() const {
+        return localVariables;
     }
     
     std::string generateMPICode() {
@@ -549,7 +660,16 @@ public:
         mpiCode << "        std::cout << \"Number of MPI processes: \" << size << std::endl;\n";
         mpiCode << "    }\n\n";
         
-        // Generate result variables with correct types
+        // Generate local variables from original main
+        mpiCode << "    // Local variables from original main function\n";
+        for (const auto& pair : localVariables) {
+            const LocalVariable& localVar = pair.second;
+            std::string defaultValue = getDefaultValue(localVar.type);
+            mpiCode << "    " << localVar.type << " " << localVar.name << " = " << defaultValue << ";\n";
+        }
+        mpiCode << "\n";
+        
+        // Generate result variables for function calls
         for (int i = 0; i < functionCalls.size(); ++i) {
             if (functionCalls[i].hasReturnValue) {
                 std::string returnType = normalizeType(functionCalls[i].returnType);
@@ -557,11 +677,7 @@ public:
                 mpiCode << "    " << returnType << " result_" << i << " = " << defaultValue << ";\n";
             }
         }
-        
-        // Add variables from the original main function (extracted values)
-        mpiCode << "\n    // Variables from original main function\n";
-        mpiCode << "    int start = 10;\n";
-        mpiCode << "    int next1, next2;\n\n";
+        mpiCode << "\n";
         
         // Generate parallel execution logic
         int groupIndex = 0;
@@ -576,21 +692,18 @@ public:
                 int callIdx = group[0];
                 mpiCode << "    if (rank == 0) {\n";
                 
-                // Handle special cases for functions with parameters
-                if (functionCalls[callIdx].functionName == "getNextValue") {
-                    if (callIdx == 9) { // First getNextValue
-                        mpiCode << "        result_" << callIdx << " = getNextValue(start);\n";
-                        mpiCode << "        next1 = result_" << callIdx << ";\n";
-                    } else { // Second getNextValue  
-                        mpiCode << "        result_" << callIdx << " = getNextValue(next1);\n";
-                        mpiCode << "        next2 = result_" << callIdx << ";\n";
-                    }
-                } else if (functionCalls[callIdx].hasReturnValue) {
-                    // Try to extract parameters from original call
+                if (functionCalls[callIdx].hasReturnValue) {
                     std::string originalCall = functionCalls[callIdx].callExpression;
-                    mpiCode << "        result_" << callIdx << " = " << originalCall << ";\n";
+                    mpiCode << "        result_" << callIdx << " = " << extractFunctionCall(originalCall) << ";\n";
+                    if (!functionCalls[callIdx].returnVariable.empty()) {
+                        mpiCode << "        " << functionCalls[callIdx].returnVariable << " = result_" << callIdx << ";\n";
+                    }
                 } else {
-                    mpiCode << "        " << functionCalls[callIdx].functionName << "();\n";
+                    std::string originalCall = functionCalls[callIdx].callExpression;
+                    if (!originalCall.empty() && originalCall.back() == ';') {
+                        originalCall.pop_back();
+                    }
+                    mpiCode << "        " << originalCall << ";\n";
                 }
                 mpiCode << "    }\n";
             } else {
@@ -600,22 +713,9 @@ public:
                     mpiCode << "    if (rank == " << i << " && " << i << " < size) {\n";
                     
                     if (functionCalls[callIdx].hasReturnValue) {
-                        // Use original call expression when possible
                         std::string originalCall = functionCalls[callIdx].callExpression;
-                        // Extract just the function call part if it's a variable assignment
-                        size_t equalPos = originalCall.find('=');
-                        if (equalPos != std::string::npos) {
-                            std::string funcCall = originalCall.substr(equalPos + 1);
-                            // Trim whitespace
-                            size_t start = funcCall.find_first_not_of(" \t");
-                            size_t end = funcCall.find_last_not_of(" \t;");
-                            if (start != std::string::npos && end != std::string::npos) {
-                                funcCall = funcCall.substr(start, end - start + 1);
-                            }
-                            mpiCode << "        result_" << callIdx << " = " << funcCall << ";\n";
-                        } else {
-                            mpiCode << "        result_" << callIdx << " = " << originalCall << ";\n";
-                        }
+                        std::string funcCall = extractFunctionCall(originalCall);
+                        mpiCode << "        result_" << callIdx << " = " << funcCall << ";\n";
                         
                         // Send result back to rank 0 if not rank 0
                         if (i != 0) {
@@ -626,7 +726,6 @@ public:
                     } else {
                         // For void functions, use the original call expression
                         std::string originalCall = functionCalls[callIdx].callExpression;
-                        // Remove any trailing semicolon
                         if (!originalCall.empty() && originalCall.back() == ';') {
                             originalCall.pop_back();
                         }
@@ -646,7 +745,32 @@ public:
                                << ", MPI_COMM_WORLD, MPI_STATUS_IGNORE);\n";
                     }
                 }
+                
+                // Update local variables with results
+                for (int i = 0; i < group.size(); ++i) {
+                    int callIdx = group[i];
+                    if (functionCalls[callIdx].hasReturnValue && !functionCalls[callIdx].returnVariable.empty()) {
+                        mpiCode << "        " << functionCalls[callIdx].returnVariable << " = result_" << callIdx << ";\n";
+                    }
+                }
                 mpiCode << "    }\n";
+            }
+            
+            // Broadcast updated variables to all processes for subsequent groups
+            mpiCode << "    // Broadcast updated variables to all processes\n";
+            std::set<std::string> variablesToBroadcast;
+            for (int i = 0; i < group.size(); ++i) {
+                int callIdx = group[i];
+                if (functionCalls[callIdx].hasReturnValue && !functionCalls[callIdx].returnVariable.empty()) {
+                    variablesToBroadcast.insert(functionCalls[callIdx].returnVariable);
+                }
+            }
+            
+            for (const std::string& varName : variablesToBroadcast) {
+                if (localVariables.count(varName)) {
+                    std::string mpiType = getMPIDatatype(localVariables.at(varName).type);
+                    mpiCode << "    MPI_Bcast(&" << varName << ", 1, " << mpiType << ", 0, MPI_COMM_WORLD);\n";
+                }
             }
             
             mpiCode << "    MPI_Barrier(MPI_COMM_WORLD);\n\n";
@@ -657,12 +781,20 @@ public:
         mpiCode << "    if (rank == 0) {\n";
         mpiCode << "        std::cout << \"\\n=== Results ===\" << std::endl;\n";
         
-        // Generate output similar to original main function
+        // Generate output for local variables
+        for (const auto& pair : localVariables) {
+            const LocalVariable& localVar = pair.second;
+            if (localVar.definedAtCall >= 0) {
+                mpiCode << "        std::cout << \"" << localVar.name << " = \" << " << localVar.name << " << std::endl;\n";
+            }
+        }
+        
+        // Generate output for function results
         for (int i = 0; i < functionCalls.size(); ++i) {
             if (functionCalls[i].hasReturnValue) {
                 std::string varName = functionCalls[i].returnVariable;
                 if (!varName.empty()) {
-                    mpiCode << "        std::cout << \"" << varName << " = \" << result_" << i << " << std::endl;\n";
+                    mpiCode << "        std::cout << \"" << varName << " = \" << " << varName << " << std::endl;\n";
                 } else {
                     mpiCode << "        std::cout << \"" << functionCalls[i].functionName 
                            << " result: \" << result_" << i << " << std::endl;\n";
@@ -678,6 +810,27 @@ public:
         mpiCode << "}\n";
         
         return mpiCode.str();
+    }
+    
+private:
+    std::string extractFunctionCall(const std::string& originalCall) {
+        // Extract just the function call part if it's a variable assignment
+        size_t equalPos = originalCall.find('=');
+        if (equalPos != std::string::npos) {
+            std::string funcCall = originalCall.substr(equalPos + 1);
+            // Trim whitespace and semicolon
+            size_t start = funcCall.find_first_not_of(" \t");
+            size_t end = funcCall.find_last_not_of(" \t;");
+            if (start != std::string::npos && end != std::string::npos) {
+                return funcCall.substr(start, end - start + 1);
+            }
+        }
+        // If no assignment found, return as is (minus trailing semicolon)
+        std::string result = originalCall;
+        if (!result.empty() && result.back() == ';') {
+            result.pop_back();
+        }
+        return result;
     }
 };
 
@@ -705,15 +858,13 @@ public:
         functionAnalyzer.TraverseDecl(Context.getTranslationUnitDecl());
         
         // Third pass: extract main function calls
-        // IMPORTANT: Set function analysis before processing main function
         mainExtractor.setFunctionAnalysis(&functionAnalyzer.functionAnalysis);
         mainExtractor.TraverseDecl(Context.getTranslationUnitDecl());
         
         // Perform parallelization analysis
         MPIParallelizer parallelizer(mainExtractor.functionCalls, 
                                    functionAnalyzer.functionAnalysis,
-                                   mainExtractor.variableToCallIndex,
-                                   mainExtractor.callDependsOnVars,
+                                   mainExtractor.getLocalVariables(),
                                    functionAnalyzer.functionDefinitions);
         
         // Generate output
@@ -742,16 +893,38 @@ private:
             llvm::outs() << "  " << var << "\n";
         }
         
+        llvm::outs() << "\nLocal Variables Found:\n";
+        const auto& localVars = parallelizer.getLocalVariables();
+        for (const auto& pair : localVars) {
+            const LocalVariable& localVar = pair.second;
+            llvm::outs() << "  " << localVar.name << " (" << localVar.type << ")\n";
+            llvm::outs() << "    Defined at call: " << localVar.definedAtCall << "\n";
+            llvm::outs() << "    Used in calls: ";
+            for (int callIdx : localVar.usedInCalls) {
+                llvm::outs() << callIdx << " ";
+            }
+            llvm::outs() << "\n";
+            llvm::outs() << "    Is parameter: " << (localVar.isParameter ? "yes" : "no") << "\n";
+        }
+        
         llvm::outs() << "\nFunction Analysis:\n";
         for (const auto& pair : functionAnalyzer.functionAnalysis) {
             llvm::outs() << "  Function: " << pair.first << "\n";
             llvm::outs() << "    Return Type: " << pair.second.returnType << "\n";
-            llvm::outs() << "    Reads: ";
+            llvm::outs() << "    Global Reads: ";
             for (const auto& var : pair.second.readSet) {
                 llvm::outs() << var << " ";
             }
-            llvm::outs() << "\n    Writes: ";
+            llvm::outs() << "\n    Global Writes: ";
             for (const auto& var : pair.second.writeSet) {
+                llvm::outs() << var << " ";
+            }
+            llvm::outs() << "\n    Local Reads: ";
+            for (const auto& var : pair.second.localReads) {
+                llvm::outs() << var << " ";
+            }
+            llvm::outs() << "\n    Local Writes: ";
+            for (const auto& var : pair.second.localWrites) {
                 llvm::outs() << var << " ";
             }
             llvm::outs() << "\n";
@@ -762,20 +935,17 @@ private:
             const auto& call = mainExtractor.functionCalls[i];
             llvm::outs() << "  " << i << ": " << call.functionName 
                         << " (line " << call.lineNumber << ", returns " << call.returnType << ")\n";
-        }
-        
-        llvm::outs() << "\nVariable Dependencies:\n";
-        for (int i = 0; i < mainExtractor.functionCalls.size(); ++i) {
-            const auto& call = mainExtractor.functionCalls[i];
-            llvm::outs() << "  Call " << i << " (" << call.functionName << "): depends on [";
-            if (i < mainExtractor.callDependsOnVars.size()) {
-                for (const auto& var : mainExtractor.callDependsOnVars[i]) {
-                    llvm::outs() << var << " ";
-                }
+            llvm::outs() << "    Parameters: ";
+            for (const std::string& param : call.parameterVariables) {
+                llvm::outs() << param << " ";
             }
-            llvm::outs() << "]\n";
-            if (!call.returnVariable.empty()) {
-                llvm::outs() << "    produces: " << call.returnVariable << " (" << call.returnType << ")\n";
+            llvm::outs() << "\n    Used local vars: ";
+            for (const std::string& var : call.usedLocalVariables) {
+                llvm::outs() << var << " ";
+            }
+            llvm::outs() << "\n";
+            if (call.hasReturnValue && !call.returnVariable.empty()) {
+                llvm::outs() << "    Produces: " << call.returnVariable << " (" << call.returnType << ")\n";
             }
         }
         
@@ -794,6 +964,9 @@ private:
                 llvm::outs() << dep << " ";
             }
             llvm::outs() << "]\n";
+            if (!depGraph[i].dependencyReason.empty()) {
+                llvm::outs() << "    reason: " << depGraph[i].dependencyReason << "\n";
+            }
         }
         
         auto groups = parallelizer.getParallelizableGroups();
