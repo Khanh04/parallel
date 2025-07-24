@@ -546,55 +546,37 @@ public:
         std::vector<bool> processed(functionCalls.size(), false);
         std::vector<int> inDegree(functionCalls.size());
         
-        // Calculate in-degrees
+        // Calculate in-degrees (number of dependencies)
         for (int i = 0; i < dependencyGraph.size(); ++i) {
             inDegree[i] = dependencyGraph[i].dependencies.size();
         }
         
         while (true) {
-            std::vector<int> independentNodes;
-            std::vector<int> producerNodes;
-            
-            // Separate nodes with in-degree 0 into two categories:
-            // 1. Independent nodes (no dependencies, no dependents)
-            // 2. Producer nodes (no dependencies, but have dependents)
+            // Find ALL nodes that are ready to execute (no unresolved dependencies)
+            std::vector<int> readyNodes;
             for (int i = 0; i < functionCalls.size(); ++i) {
                 if (!processed[i] && inDegree[i] == 0) {
-                    if (dependencyGraph[i].dependents.empty()) {
-                        independentNodes.push_back(i);
-                    } else {
-                        producerNodes.push_back(i);
-                    }
+                    readyNodes.push_back(i);
                 }
             }
             
-            // First, process all truly independent nodes together
-            if (!independentNodes.empty()) {
-                groups.push_back(independentNodes);
-                
-                for (int nodeIdx : independentNodes) {
-                    processed[nodeIdx] = true;
-                    for (int dependent : dependencyGraph[nodeIdx].dependents) {
-                        inDegree[dependent]--;
-                    }
-                }
-                continue;
+            if (readyNodes.empty()) {
+                break; // No more nodes to process
             }
             
-            // Then, process producer nodes one at a time
-            if (!producerNodes.empty()) {
-                std::vector<int> singleProducer = {producerNodes[0]};
-                groups.push_back(singleProducer);
-                
-                processed[producerNodes[0]] = true;
-                for (int dependent : dependencyGraph[producerNodes[0]].dependents) {
+            // SIMPLE STRATEGY: All ready nodes can execute in parallel
+            // The key insight: if a node has no dependencies, it can start immediately
+            // Whether it has dependents doesn't matter - those dependents will wait
+            groups.push_back(readyNodes);
+            
+            // Mark all ready nodes as processed and update dependents
+            for (int nodeIdx : readyNodes) {
+                processed[nodeIdx] = true;
+                // Reduce in-degree for all nodes that depend on this one
+                for (int dependent : dependencyGraph[nodeIdx].dependents) {
                     inDegree[dependent]--;
                 }
-                continue;
             }
-            
-            // If no nodes are available, we're done
-            break;
         }
         
         return groups;
@@ -615,11 +597,9 @@ public:
         
         std::stringstream mpiCode;
         
-        // Add MPI headers and initialization
+        // Add MPI headers and initialization (simplified to avoid conflicts)
         mpiCode << "#include <mpi.h>\n";
         mpiCode << "#include <stdio.h>\n";
-        mpiCode << "#include <stdlib.h>\n";
-        mpiCode << "#include <unistd.h>\n";
         mpiCode << "#include <iostream>\n\n";
         
         // Output the actual function definitions from the input file
