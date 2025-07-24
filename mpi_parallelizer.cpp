@@ -624,7 +624,13 @@ public:
                                    << ", 1, " << mpiType << ", 0, " << callIdx << ", MPI_COMM_WORLD);\n";
                         }
                     } else {
-                        mpiCode << "        " << functionCalls[callIdx].functionName << "();\n";
+                        // For void functions, use the original call expression
+                        std::string originalCall = functionCalls[callIdx].callExpression;
+                        // Remove any trailing semicolon
+                        if (!originalCall.empty() && originalCall.back() == ';') {
+                            originalCall.pop_back();
+                        }
+                        mpiCode << "        " << originalCall << ";\n";
                     }
                     mpiCode << "    }\n";
                 }
