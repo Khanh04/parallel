@@ -11,11 +11,33 @@ include_directories(${CLANG_INCLUDE_DIRS})
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 add_definitions(${LLVM_DEFINITIONS_LIST})
 
-# Create the executable
-add_executable(mpi-parallelizer mpi_parallelizer.cpp)
+# Create the executable with modular source files
+add_executable(mpi-parallelizer 
+    mpi_parallelizer_new.cpp
+    data_structures.h
+    loop_analyzer.cpp
+    function_analyzer.cpp
+    main_extractor.cpp
+    hybrid_parallelizer.cpp
+    ast_consumer.cpp
+)
 
-# Link against Clang libraries
+# Also create the original monolithic version for comparison
+add_executable(mpi-parallelizer-original mpi_parallelizer.cpp)
+
+# Link against Clang libraries for both executables
 target_link_libraries(mpi-parallelizer
+    clangAST
+    clangBasic
+    clangDriver
+    clangFrontend
+    clangRewriteFrontend
+    clangSerialization
+    clangTooling
+    clangRewrite
+)
+
+target_link_libraries(mpi-parallelizer-original
     clangAST
     clangBasic
     clangDriver
@@ -45,24 +67,37 @@ llvm_map_components_to_libnames(llvm_libs
     bitreader
 )
 
-# Link against specific LLVM libraries
+# Link against specific LLVM libraries for both executables
 target_link_libraries(mpi-parallelizer ${llvm_libs})
+target_link_libraries(mpi-parallelizer-original ${llvm_libs})
 
-# Set C++ standard to C++17 (required for modern LLVM)
+# Set C++ standard to C++17 (required for modern LLVM) for both executables
 set_target_properties(mpi-parallelizer PROPERTIES
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED ON
 )
 
-# Add compiler-specific flags
+set_target_properties(mpi-parallelizer-original PROPERTIES
+    CXX_STANDARD 17
+    CXX_STANDARD_REQUIRED ON
+)
+
+# Add compiler-specific flags for both executables
 if(APPLE)
     # On macOS, ensure we use the right standard library
     target_compile_options(mpi-parallelizer PRIVATE -stdlib=libc++)
     target_link_options(mpi-parallelizer PRIVATE -stdlib=libc++)
+    target_compile_options(mpi-parallelizer-original PRIVATE -stdlib=libc++)
+    target_link_options(mpi-parallelizer-original PRIVATE -stdlib=libc++)
 endif()
 
 # Disable problematic warnings that can cause issues with LLVM headers
 target_compile_options(mpi-parallelizer PRIVATE
+    -Wno-unused-parameter
+    -Wno-strict-aliasing
+)
+
+target_compile_options(mpi-parallelizer-original PRIVATE
     -Wno-unused-parameter
     -Wno-strict-aliasing
 )
