@@ -1480,15 +1480,26 @@ private:
                 continue; // Already has a pragma
             }
             
-            // Get indentation from the loop line
+            // Find the actual "for" keyword position to get correct indentation
+            size_t forPos = parallelizedBody.find("for", loopPos);
+            if (forPos == std::string::npos || forPos > loopPos + loop.source_code.length()) {
+                continue;
+            }
+            
+            // Find the line start for the "for" statement
+            size_t forLineStart = parallelizedBody.rfind('\n', forPos);
+            if (forLineStart == std::string::npos) forLineStart = 0;
+            else forLineStart++;
+            
+            // Get indentation from the "for" line (not the loop body)
             std::string indentation = "";
-            for (size_t i = lineStart; i < loopPos && (parallelizedBody[i] == ' ' || parallelizedBody[i] == '\t'); i++) {
+            for (size_t i = forLineStart; i < forPos && (parallelizedBody[i] == ' ' || parallelizedBody[i] == '\t'); i++) {
                 indentation += parallelizedBody[i];
             }
             
-            // Insert the pragma
+            // Insert the pragma with the same indentation as the for loop
             std::string pragmaLine = indentation + loop.pragma_text + "\n";
-            parallelizedBody.insert(loopPos, pragmaLine);
+            parallelizedBody.insert(forLineStart, pragmaLine);
         }
         
         return parallelizedBody;
