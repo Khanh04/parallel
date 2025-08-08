@@ -379,9 +379,8 @@ std::string ComprehensiveLoopAnalyzer::generateOpenMPPragma(const LoopInfo& loop
         }
     }
     
-    if (!loop.loop_variable.empty()) {
-        pragma << " private(" << loop.loop_variable << ")";
-    }
+    // Note: Loop variables declared in for-loop are automatically private
+    // Only add private clause for variables declared outside the loop
     
     pragma << " schedule(" << loop.schedule_type;
     if (loop.schedule_type == "dynamic") {

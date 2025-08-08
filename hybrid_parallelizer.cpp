@@ -429,9 +429,11 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
                 int callIdx = group[i];
                 if (functionCalls[callIdx].hasReturnValue) {
                     std::string mpiType = getMPIDatatype(functionCalls[callIdx].returnType);
-                    mpiCode << "        MPI_Recv(&result_" << callIdx 
+                    mpiCode << "        if (" << i << " < size) {\n";
+                    mpiCode << "            MPI_Recv(&result_" << callIdx 
                            << ", 1, " << mpiType << ", " << i << ", " << callIdx 
                            << ", MPI_COMM_WORLD, MPI_STATUS_IGNORE);\n";
+                    mpiCode << "        }\n";
                 }
             }
             
@@ -465,11 +467,76 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
         groupIndex++;
     }
     
-    // Print results section continues with the rest of the original implementation...
+    // Print results (avoiding duplicates)
     mpiCode << "    if (rank == 0) {\n";
     mpiCode << "        std::cout << \"\\n=== Results ===\" << std::endl;\n";
     
-    // Rest of the results printing code...
+    // Print loop parallelization summary
+    mpiCode << "        std::cout << \"\\n=== Loop Parallelization Summary ===\" << std::endl;\n";
+    
+    // Create a map to track unique loops per function
+    std::map<std::string, std::vector<LoopInfo>> uniqueFunctionLoops;
+    for (const auto& pair : functionInfo) {
+        const FunctionInfo& info = pair.second;
+        if (!info.loops.empty()) {
+            std::vector<LoopInfo> uniqueLoops;
+            std::set<std::string> processedLoops;
+            
+            for (const auto& loop : info.loops) {
+                std::string loopKey = std::to_string(loop.start_line) + "_" + std::to_string(loop.start_col);
+                if (processedLoops.find(loopKey) == processedLoops.end()) {
+                    uniqueLoops.push_back(loop);
+                    processedLoops.insert(loopKey);
+                }
+            }
+            uniqueFunctionLoops[info.name] = uniqueLoops;
+        }
+    }
+    
+    for (const auto& pair : uniqueFunctionLoops) {
+        const std::string& funcName = pair.first;
+        const std::vector<LoopInfo>& loops = pair.second;
+        
+        // Skip main function loops since we're not parallelizing them in the generated MPI code
+        if (funcName == "main") {
+            continue;
+        }
+        
+        mpiCode << "        std::cout << \"Function " << funcName << ": \" << " << loops.size() << " << \" loops found\" << std::endl;\n";
+        for (const auto& loop : loops) {
+            if (loop.parallelizable) {
+                mpiCode << "        std::cout << \"  - Line " << loop.start_line << ": PARALLELIZED (" << loop.type << ")\" << std::endl;\n";
+            } else {
+                mpiCode << "        std::cout << \"  - Line " << loop.start_line << ": not parallelized (" << loop.type << ")\" << std::endl;\n";
+            }
+        }
+    }
+    
+    // Print variable results (avoiding duplicates)
+    std::set<std::string> printedVars;
+    
+    for (const auto& pair : localVariables) {
+        const LocalVariable& localVar = pair.second;
+        if (localVar.definedAtCall >= 0 && printedVars.find(localVar.name) == printedVars.end()) {
+            mpiCode << "        std::cout << \"" << localVar.name << " = \" << " << localVar.name << " << std::endl;\n";
+            printedVars.insert(localVar.name);
+        }
+    }
+    
+    // Print function call results (avoiding duplicates)
+    for (int i = 0; i < functionCalls.size(); ++i) {
+        if (functionCalls[i].hasReturnValue) {
+            std::string varName = functionCalls[i].returnVariable;
+            if (!varName.empty() && printedVars.find(varName) == printedVars.end()) {
+                mpiCode << "        std::cout << \"" << varName << " = \" << " << varName << " << std::endl;\n";
+                printedVars.insert(varName);
+            } else if (varName.empty()) {
+                mpiCode << "        std::cout << \"" << functionCalls[i].functionName 
+                       << " result: \" << result_" << i << " << std::endl;\n";
+            }
+        }
+    }
+    
     mpiCode << "        std::cout << \"\\n=== Enhanced Hybrid MPI/OpenMP Execution Complete ===\" << std::endl;\n";
     mpiCode << "    }\n\n";
     
