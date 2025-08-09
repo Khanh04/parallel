@@ -22,22 +22,10 @@ add_executable(mpi-parallelizer
     ast_consumer.cpp
 )
 
-# Also create the original monolithic version for comparison
-add_executable(mpi-parallelizer-original mpi_parallelizer.cpp)
+# Original monolithic version removed - using modular architecture only
 
-# Link against Clang libraries for both executables
+# Link against Clang libraries for the modular version
 target_link_libraries(mpi-parallelizer
-    clangAST
-    clangBasic
-    clangDriver
-    clangFrontend
-    clangRewriteFrontend
-    clangSerialization
-    clangTooling
-    clangRewrite
-)
-
-target_link_libraries(mpi-parallelizer-original
     clangAST
     clangBasic
     clangDriver
@@ -67,37 +55,24 @@ llvm_map_components_to_libnames(llvm_libs
     bitreader
 )
 
-# Link against specific LLVM libraries for both executables
+# Link against specific LLVM libraries
 target_link_libraries(mpi-parallelizer ${llvm_libs})
-target_link_libraries(mpi-parallelizer-original ${llvm_libs})
 
-# Set C++ standard to C++17 (required for modern LLVM) for both executables
+# Set C++ standard to C++17 (required for modern LLVM)
 set_target_properties(mpi-parallelizer PROPERTIES
     CXX_STANDARD 17
     CXX_STANDARD_REQUIRED ON
 )
 
-set_target_properties(mpi-parallelizer-original PROPERTIES
-    CXX_STANDARD 17
-    CXX_STANDARD_REQUIRED ON
-)
-
-# Add compiler-specific flags for both executables
+# Add compiler-specific flags
 if(APPLE)
     # On macOS, ensure we use the right standard library
     target_compile_options(mpi-parallelizer PRIVATE -stdlib=libc++)
     target_link_options(mpi-parallelizer PRIVATE -stdlib=libc++)
-    target_compile_options(mpi-parallelizer-original PRIVATE -stdlib=libc++)
-    target_link_options(mpi-parallelizer-original PRIVATE -stdlib=libc++)
 endif()
 
 # Disable problematic warnings that can cause issues with LLVM headers
 target_compile_options(mpi-parallelizer PRIVATE
-    -Wno-unused-parameter
-    -Wno-strict-aliasing
-)
-
-target_compile_options(mpi-parallelizer-original PRIVATE
     -Wno-unused-parameter
     -Wno-strict-aliasing
 )
