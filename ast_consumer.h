@@ -26,6 +26,8 @@ public:
     
 private:
     void printEnhancedAnalysisResults(const HybridParallelizer& parallelizer);
+    void generateDependencyGraphVisualization(const HybridParallelizer& parallelizer);
+    void generateGraphvizDependencyGraph(const HybridParallelizer& parallelizer);
 };
 
 class HybridParallelizerAction : public clang::ASTFrontendAction {

@@ -3,6 +3,7 @@
 #include "llvm/Support/raw_ostream.h"
 #include <memory>
 #include <fstream>
+#include <algorithm>
 
 using namespace clang;
 
@@ -54,6 +55,10 @@ void HybridParallelizerConsumer::HandleTranslationUnit(ASTContext &Context) {
     } else {
         llvm::errs() << "Error: Could not create output file\n";
     }
+    
+    // Generate dependency graph visualizations
+    generateDependencyGraphVisualization(parallelizer);
+    generateGraphvizDependencyGraph(parallelizer);
     
     // Print comprehensive analysis results
     printEnhancedAnalysisResults(parallelizer);
@@ -183,6 +188,271 @@ void HybridParallelizerConsumer::printEnhancedAnalysisResults(const HybridParall
     llvm::outs() << "  - Comprehensive loop analysis across ALL functions\n";
     llvm::outs() << "  - Automatic pragma generation for parallelizable loops\n";
     llvm::outs() << "  - Thread-safe function execution with nested parallelism\n";
+}
+
+void HybridParallelizerConsumer::generateDependencyGraphVisualization(const HybridParallelizer& parallelizer) {
+    std::ofstream htmlFile("dependency_graph_visualization.html");
+    if (!htmlFile.is_open()) {
+        llvm::errs() << "Error: Could not create dependency graph visualization file\n";
+        return;
+    }
+
+    const auto& functionCalls = mainExtractor.functionCalls;
+    const auto& dependencyGraph = parallelizer.getDependencyGraph();
+    auto parallelGroups = parallelizer.getParallelizableGroups();
+
+    // Write a simple HTML visualization
+    htmlFile << "<!DOCTYPE html>\n<html>\n<head>\n";
+    htmlFile << "<title>MPI Parallelizer - Dependency Graph</title>\n";
+    htmlFile << "<script src=\"https://d3js.org/d3.v7.min.js\"></script>\n";
+    htmlFile << "<style>\n";
+    htmlFile << "body { font-family: Arial, sans-serif; margin: 20px; }\n";
+    htmlFile << ".node { cursor: pointer; }\n";
+    htmlFile << ".node circle { stroke: #fff; stroke-width: 3px; }\n";
+    htmlFile << ".link { stroke: #666; stroke-width: 2px; fill: none; }\n";
+    htmlFile << ".group-0 { fill: #3498db; }\n";
+    htmlFile << ".group-1 { fill: #2ecc71; }\n";
+    htmlFile << ".group-2 { fill: #f39c12; }\n";
+    htmlFile << "</style>\n</head>\n<body>\n";
+    
+    htmlFile << "<h1>Dependency Graph Visualization</h1>\n";
+    htmlFile << "<p>Total Functions: " << functionCalls.size() << "</p>\n";
+    htmlFile << "<p>Parallel Groups: " << parallelGroups.size() << "</p>\n";
+    htmlFile << "<svg id=\"graph\" width=\"1200\" height=\"600\"></svg>\n";
+    
+    htmlFile << "<script>\n";
+    htmlFile << "const nodes = [";
+
+    // Generate nodes data
+    for (size_t i = 0; i < functionCalls.size(); ++i) {
+        const auto& call = functionCalls[i];
+        
+        // Determine which group this function belongs to
+        int groupId = -1;
+        for (size_t g = 0; g < parallelGroups.size(); ++g) {
+            if (std::find(parallelGroups[g].begin(), parallelGroups[g].end(), i) != parallelGroups[g].end()) {
+                groupId = g;
+                break;
+            }
+        }
+
+        htmlFile << "{";
+        htmlFile << "id: " << i << ", ";
+        htmlFile << "name: \"" << call.functionName << "\", ";
+        htmlFile << "group: " << groupId << "";
+        htmlFile << "}";
+        if (i < functionCalls.size() - 1) htmlFile << ",";
+        htmlFile << "\n";
+    }
+
+    htmlFile << "];\n\n";
+    htmlFile << "const links = [";
+
+    // Generate links data for dependencies
+    bool firstLink = true;
+    for (size_t i = 0; i < dependencyGraph.size(); ++i) {
+        const auto& node = dependencyGraph[i];
+        for (int dep : node.dependencies) {
+            if (!firstLink) htmlFile << ",";
+            htmlFile << "{source: " << dep << ", target: " << i << "}";
+            firstLink = false;
+        }
+    }
+
+    htmlFile << "];\n\n";
+    
+    htmlFile << "const svg = d3.select('#graph');\n";
+    htmlFile << "const width = +svg.attr('width');\n";
+    htmlFile << "const height = +svg.attr('height');\n";
+    htmlFile << "const simulation = d3.forceSimulation(nodes)\n";
+    htmlFile << "  .force('link', d3.forceLink(links).id(d => d.id).distance(100))\n";
+    htmlFile << "  .force('charge', d3.forceManyBody().strength(-300))\n";
+    htmlFile << "  .force('center', d3.forceCenter(width / 2, height / 2));\n";
+    
+    htmlFile << "const link = svg.append('g').selectAll('line').data(links).enter().append('line').attr('class', 'link');\n";
+    htmlFile << "const node = svg.append('g').selectAll('circle').data(nodes).enter().append('circle')\n";
+    htmlFile << "  .attr('r', 15).attr('class', d => 'group-' + (d.group >= 0 ? d.group : 'default'));\n";
+    
+    htmlFile << "simulation.on('tick', () => {\n";
+    htmlFile << "  link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)\n";
+    htmlFile << "      .attr('x2', d => d.target.x).attr('y2', d => d.target.y);\n";
+    htmlFile << "  node.attr('cx', d => d.x).attr('cy', d => d.y);\n";
+    htmlFile << "});\n";
+    
+    htmlFile << "</script>\n</body>\n</html>\n";
+
+    htmlFile.close();
+    llvm::outs() << "Dependency graph visualization generated: dependency_graph_visualization.html\n";
+}
+
+void HybridParallelizerConsumer::generateGraphvizDependencyGraph(const HybridParallelizer& parallelizer) {
+    std::ofstream dotFile("dependency_graph.dot");
+    if (!dotFile.is_open()) {
+        llvm::errs() << "Error: Could not create Graphviz DOT file\n";
+        return;
+    }
+
+    const auto& functionCalls = mainExtractor.functionCalls;
+    const auto& dependencyGraph = parallelizer.getDependencyGraph();
+    auto parallelGroups = parallelizer.getParallelizableGroups();
+    const auto& functionAnalysis = functionAnalyzer.functionAnalysis;
+
+    // DOT file header with graph attributes
+    dotFile << "digraph DependencyGraph {\n";
+    dotFile << "    // Graph attributes\n";
+    dotFile << "    rankdir=TB;\n";
+    dotFile << "    node [shape=box, style=filled, fontname=\"Arial\", fontsize=10];\n";
+    dotFile << "    edge [fontname=\"Arial\", fontsize=8];\n";
+    dotFile << "    bgcolor=white;\n";
+    dotFile << "    label=\"MPI Parallelizer - Function Dependency Graph\\n";
+    dotFile << "Total Functions: " << functionCalls.size() << "\\n";
+    dotFile << "Parallel Groups: " << parallelGroups.size() << "\";\n";
+    dotFile << "    labelloc=t;\n";
+    dotFile << "    fontsize=16;\n\n";
+
+    // Define color schemes for parallel groups
+    const std::vector<std::string> groupColors = {
+        "#E3F2FD", "#E8F5E8", "#FFF3E0", "#F3E5F5", "#FFEBEE", "#E0F2F1"
+    };
+    const std::vector<std::string> borderColors = {
+        "#1976D2", "#388E3C", "#F57C00", "#7B1FA2", "#D32F2F", "#00796B"
+    };
+
+    // Generate subgraphs for each parallel group
+    for (size_t g = 0; g < parallelGroups.size(); ++g) {
+        dotFile << "    // Parallel Group " << g << "\n";
+        dotFile << "    subgraph cluster_group" << g << " {\n";
+        dotFile << "        label=\"Parallel Group " << g << " (" << parallelGroups[g].size() << " functions)\";\n";
+        dotFile << "        style=filled;\n";
+        dotFile << "        fillcolor=\"" << (g < groupColors.size() ? groupColors[g] : "#F5F5F5") << "\";\n";
+        dotFile << "        color=\"" << (g < borderColors.size() ? borderColors[g] : "#666666") << "\";\n";
+        dotFile << "        fontcolor=\"" << (g < borderColors.size() ? borderColors[g] : "#666666") << "\";\n";
+
+        for (int funcIdx : parallelGroups[g]) {
+            const auto& call = functionCalls[funcIdx];
+            dotFile << "        func" << funcIdx;
+        }
+        dotFile << ";\n    }\n\n";
+    }
+
+    // Generate nodes with detailed information
+    dotFile << "    // Function nodes\n";
+    for (size_t i = 0; i < functionCalls.size(); ++i) {
+        const auto& call = functionCalls[i];
+        
+        // Determine group for coloring
+        int groupId = -1;
+        for (size_t g = 0; g < parallelGroups.size(); ++g) {
+            if (std::find(parallelGroups[g].begin(), parallelGroups[g].end(), i) != parallelGroups[g].end()) {
+                groupId = g;
+                break;
+            }
+        }
+
+        // Get function analysis info
+        std::string funcDetails = call.functionName;
+        if (functionAnalysis.count(call.functionName)) {
+            const auto& analysis = functionAnalysis.at(call.functionName);
+            funcDetails += "\\n(" + analysis.returnType + ")";
+            
+            if (!analysis.readSet.empty()) {
+                funcDetails += "\\nReads: ";
+                bool first = true;
+                for (const auto& var : analysis.readSet) {
+                    if (!first) funcDetails += ", ";
+                    funcDetails += var;
+                    first = false;
+                    if (funcDetails.length() > 100) { // Limit length
+                        funcDetails += "...";
+                        break;
+                    }
+                }
+            }
+            
+            if (!analysis.writeSet.empty()) {
+                funcDetails += "\\nWrites: ";
+                bool first = true;
+                for (const auto& var : analysis.writeSet) {
+                    if (!first) funcDetails += ", ";
+                    funcDetails += var;
+                    first = false;
+                    if (funcDetails.length() > 150) { // Limit length
+                        funcDetails += "...";
+                        break;
+                    }
+                }
+            }
+        }
+
+        dotFile << "    func" << i << " [";
+        dotFile << "label=\"" << funcDetails << "\"";
+        
+        if (call.hasReturnValue) {
+            dotFile << ", shape=box, style=\"filled,bold\"";
+        } else {
+            dotFile << ", shape=ellipse, style=filled";
+        }
+        
+        if (groupId >= 0 && groupId < (int)groupColors.size()) {
+            dotFile << ", fillcolor=\"" << groupColors[groupId] << "\"";
+            dotFile << ", color=\"" << borderColors[groupId] << "\"";
+        } else {
+            dotFile << ", fillcolor=\"#F5F5F5\", color=\"#666666\"";
+        }
+        
+        dotFile << "];\n";
+    }
+
+    dotFile << "\n    // Dependencies\n";
+    
+    // Generate dependency edges with labels
+    for (size_t i = 0; i < dependencyGraph.size(); ++i) {
+        const auto& node = dependencyGraph[i];
+        for (int dep : node.dependencies) {
+            dotFile << "    func" << dep << " -> func" << i;
+            
+            // Add edge label with dependency reason
+            if (!node.dependencyReason.empty()) {
+                std::string reason = node.dependencyReason;
+                // Simplify long reasons
+                if (reason.length() > 30) {
+                    size_t colonPos = reason.find(':');
+                    if (colonPos != std::string::npos && colonPos < 25) {
+                        reason = reason.substr(0, colonPos + 1) + "...";
+                    } else {
+                        reason = reason.substr(0, 27) + "...";
+                    }
+                }
+                dotFile << " [label=\"" << reason << "\", color=red, fontcolor=red]";
+            } else {
+                dotFile << " [color=red]";
+            }
+            
+            dotFile << ";\n";
+        }
+    }
+
+    // Add legend
+    dotFile << "\n    // Legend\n";
+    dotFile << "    subgraph cluster_legend {\n";
+    dotFile << "        label=\"Legend\";\n";
+    dotFile << "        style=filled;\n";
+    dotFile << "        fillcolor=\"#FFFFFE\";\n";
+    dotFile << "        color=\"#CCCCCC\";\n";
+    dotFile << "        rank=sink;\n";
+    dotFile << "        legend_return [label=\"Function with\\nReturn Value\", shape=box, style=\"filled,bold\", fillcolor=\"#E3F2FD\"];\n";
+    dotFile << "        legend_void [label=\"Void Function\", shape=ellipse, style=filled, fillcolor=\"#E8F5E8\"];\n";
+    dotFile << "        legend_dep [label=\"Dependency\", shape=plaintext];\n";
+    dotFile << "        legend_return -> legend_void [style=invis];\n";
+    dotFile << "        legend_void -> legend_dep [color=red, label=\"depends on\"];\n";
+    dotFile << "    }\n";
+
+    dotFile << "}\n";
+
+    dotFile.close();
+    llvm::outs() << "Graphviz DOT file generated: dependency_graph.dot\n";
+    llvm::outs() << "To generate PNG: dot -Tpng dependency_graph.dot -o dependency_graph.png\n";
+    llvm::outs() << "To generate SVG: dot -Tsvg dependency_graph.dot -o dependency_graph.svg\n";
 }
 
 std::unique_ptr<ASTConsumer> HybridParallelizerAction::CreateASTConsumer(CompilerInstance &CI,
