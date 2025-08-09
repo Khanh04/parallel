@@ -18,6 +18,8 @@ struct LoopInfo {
     bool has_dependencies;               // Loop-carried dependencies
     bool has_function_calls;             // Contains function calls
     bool has_io_operations;              // Contains I/O operations
+    bool has_break_continue;             // Contains break/continue statements
+    bool has_complex_condition;          // Complex loop condition (&&, ||)
     bool is_nested;                      // Is a nested loop
     bool parallelizable;                 // Can be parallelized
     std::string schedule_type;           // Recommended schedule

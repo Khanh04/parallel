@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <regex>
 #include <sstream>
+#include <cctype>
 
 using namespace clang;
 
@@ -83,6 +84,19 @@ void ComprehensiveLoopAnalyzer::processForLoop(ForStmt *FS) {
         }
     }
     
+    // Check for complex loop condition (&&, ||, etc.)
+    if (Expr *Cond = FS->getCond()) {
+        std::string conditionText = getSourceText(Cond->getSourceRange());
+        // Remove whitespace for better matching
+        std::string trimmedCondition = conditionText;
+        trimmedCondition.erase(std::remove_if(trimmedCondition.begin(), trimmedCondition.end(), ::isspace), trimmedCondition.end());
+        
+        if (trimmedCondition.find("&&") != std::string::npos || 
+            trimmedCondition.find("||") != std::string::npos) {
+            loop.has_complex_condition = true;
+        }
+    }
+    
     // Analyze loop body
     analyzeLoopBody(FS->getBody(), loop);
     
@@ -140,9 +154,11 @@ void ComprehensiveLoopAnalyzer::processDoWhileLoop(DoStmt *DS) {
 void ComprehensiveLoopAnalyzer::analyzeLoopBody(Stmt *body, LoopInfo &loop) {
     if (!body) return;
     
-    // Initialize flags to false
+    // Initialize flags to false (preserve has_complex_condition if already set)
     loop.has_function_calls = false;
     loop.has_io_operations = false;
+    loop.has_break_continue = false;
+    // Don't reset has_complex_condition - it may have been set during condition analysis
     loop.is_nested = false;
     
     class LoopBodyVisitor : public RecursiveASTVisitor<LoopBodyVisitor> {
@@ -249,6 +265,16 @@ void ComprehensiveLoopAnalyzer::analyzeLoopBody(Stmt *body, LoopInfo &loop) {
             loop->is_nested = true;
             return true;
         }
+        
+        bool VisitBreakStmt(BreakStmt *BS) {
+            loop->has_break_continue = true;
+            return true;
+        }
+        
+        bool VisitContinueStmt(ContinueStmt *CS) {
+            loop->has_break_continue = true;
+            return true;
+        }
     };
     
     LoopBodyVisitor visitor(&loop, loop.loop_variable, &globalVariables);
@@ -314,6 +340,16 @@ void ComprehensiveLoopAnalyzer::performDependencyAnalysis(LoopInfo &loop) {
         if (loop.has_io_operations) {
             loop.parallelizable = false;
             loop.analysis_notes += "Contains I/O operations - not parallelizable. ";
+        }
+        
+        if (loop.has_break_continue) {
+            loop.parallelizable = false;
+            loop.analysis_notes += "Contains break/continue statements - not parallelizable. ";
+        }
+        
+        if (loop.has_complex_condition) {
+            loop.parallelizable = false;
+            loop.analysis_notes += "Complex loop condition - not parallelizable. ";
         }
         
         if (loop.has_dependencies && loop.reduction_vars.empty()) {

@@ -39,7 +39,8 @@ void HybridParallelizerConsumer::HandleTranslationUnit(ASTContext &Context) {
                                    functionAnalyzer.functionAnalysis,
                                    mainExtractor.getLocalVariables(),
                                    functionAnalyzer.functionInfo,
-                                   mainExtractor.getMainLoops());
+                                   mainExtractor.getMainLoops(),
+                                   globalCollector.globalVariables);
     
     // Generate output
     std::string hybridCode = parallelizer.generateHybridMPIOpenMPCode();

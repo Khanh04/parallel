@@ -8,10 +8,11 @@ HybridParallelizer::HybridParallelizer(const std::vector<FunctionCall>& calls,
                                      const std::map<std::string, FunctionAnalysis>& analysis,
                                      const std::map<std::string, LocalVariable>& localVars,
                                      const std::map<std::string, FunctionInfo>& funcInfo,
-                                     const std::vector<LoopInfo>& loops)
+                                     const std::vector<LoopInfo>& loops,
+                                     const std::set<std::string>& globals)
     : functionCalls(calls), functionAnalysis(analysis), 
       localVariables(localVars), functionInfo(funcInfo),
-      mainLoops(loops) {
+      mainLoops(loops), globalVariables(globals) {
     buildDependencyGraph();
 }
 
@@ -270,9 +271,29 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
         }
     }
     
-    if (hasGlobalReads) {
+    if (hasGlobalReads && !globalVariables.empty()) {
         mpiCode << "// Global variables\n";
-        mpiCode << "int global_counter = 0;\n\n";
+        for (const auto& globalVar : globalVariables) {
+            // Infer type from variable name (basic heuristic)
+            std::string varType = "int"; // default
+            std::string defaultValue = "0";
+            
+            if (globalVar.find("sum") != std::string::npos || globalVar.find("result") != std::string::npos) {
+                varType = "double";
+                defaultValue = "0.0";
+            } else if (globalVar.find("flag") != std::string::npos) {
+                varType = "bool";
+                defaultValue = "false";
+            } else if (globalVar.find("array") != std::string::npos) {
+                varType = "int";
+                defaultValue = "[1000]"; // Array declaration
+                mpiCode << varType << " " << globalVar << defaultValue << ";\n";
+                continue;
+            }
+            
+            mpiCode << varType << " " << globalVar << " = " << defaultValue << ";\n";
+        }
+        mpiCode << "\n";
     }
     
     // Output parallelized function definitions
