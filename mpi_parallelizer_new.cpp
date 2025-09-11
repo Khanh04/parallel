@@ -46,16 +46,24 @@ namespace {
 #include "data_structures.h"
 #include "ast_consumer.h"
 
+// External declaration for global flag
+extern bool enableLoopParallelization;
+
 using namespace clang;
 using namespace clang::tooling;
 using namespace llvm;
 
+// Global flag for loop parallelization
+bool enableLoopParallelization = true;
+
 int main(int argc, const char **argv) {
     if (argc < 2) {
-        llvm::errs() << "Usage: " << argv[0] << " <source-file>\n";
+        llvm::errs() << "Usage: " << argv[0] << " [options] <source-file>\n";
+        llvm::errs() << "\nOptions:\n";
+        llvm::errs() << "  --no-loops    Disable loop parallelization (MPI-only mode)\n";
         llvm::errs() << "\nThis enhanced tool generates comprehensive hybrid MPI/OpenMP parallelized code:\n";
         llvm::errs() << "  - MPI for parallelizing independent function calls across processes\n";
-        llvm::errs() << "  - OpenMP for parallelizing ALL loops in ALL functions\n";
+        llvm::errs() << "  - OpenMP for parallelizing ALL loops in ALL functions (unless --no-loops)\n";
         llvm::errs() << "  - Automatic dependency analysis and pragma generation\n";
         llvm::errs() << "  - Comprehensive loop analysis with detailed reporting\n";
         llvm::errs() << "  - Thread-safe nested parallelism support\n";
@@ -64,7 +72,18 @@ int main(int argc, const char **argv) {
 
     std::vector<std::string> sources;
     for (int i = 1; i < argc; ++i) {
-        sources.push_back(argv[i]);
+        std::string arg = argv[i];
+        if (arg == "--no-loops") {
+            enableLoopParallelization = false;
+            llvm::errs() << "Loop parallelization disabled - MPI-only mode enabled\n";
+        } else {
+            sources.push_back(arg);
+        }
+    }
+
+    if (sources.empty()) {
+        llvm::errs() << "Error: No source file provided\n";
+        return 1;
     }
 
     std::vector<std::string> compileCommands = {

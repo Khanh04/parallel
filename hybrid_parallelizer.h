@@ -15,6 +15,7 @@ private:
     std::map<std::string, FunctionInfo> functionInfo;
     std::vector<LoopInfo> mainLoops;
     std::set<std::string> globalVariables;
+    bool enableLoopParallelization;
     
     std::string normalizeType(const std::string& cppType);
     std::string getMPIDatatype(const std::string& cppType);
@@ -28,7 +29,8 @@ public:
                       const std::map<std::string, LocalVariable>& localVars,
                       const std::map<std::string, FunctionInfo>& funcInfo,
                       const std::vector<LoopInfo>& loops,
-                      const std::set<std::string>& globals);
+                      const std::set<std::string>& globals,
+                      bool enableLoops = true);
     
     void buildDependencyGraph();
     std::vector<std::vector<int>> getParallelizableGroups() const;

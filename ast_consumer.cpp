@@ -5,6 +5,9 @@
 #include <fstream>
 #include <algorithm>
 
+// External declaration for global flag
+extern bool enableLoopParallelization;
+
 using namespace clang;
 
 HybridParallelizerConsumer::HybridParallelizerConsumer(CompilerInstance &CI) 
@@ -41,7 +44,8 @@ void HybridParallelizerConsumer::HandleTranslationUnit(ASTContext &Context) {
                                    mainExtractor.getLocalVariables(),
                                    functionAnalyzer.functionInfo,
                                    mainExtractor.getMainLoops(),
-                                   globalCollector.globalVariables);
+                                   globalCollector.globalVariables,
+                                   enableLoopParallelization);
     
     // Generate output
     std::string hybridCode = parallelizer.generateHybridMPIOpenMPCode();

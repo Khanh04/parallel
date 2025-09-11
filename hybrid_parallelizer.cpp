@@ -9,10 +9,12 @@ HybridParallelizer::HybridParallelizer(const std::vector<FunctionCall>& calls,
                                      const std::map<std::string, LocalVariable>& localVars,
                                      const std::map<std::string, FunctionInfo>& funcInfo,
                                      const std::vector<LoopInfo>& loops,
-                                     const std::set<std::string>& globals)
+                                     const std::set<std::string>& globals,
+                                     bool enableLoops)
     : functionCalls(calls), functionAnalysis(analysis), 
       localVariables(localVars), functionInfo(funcInfo),
-      mainLoops(loops), globalVariables(globals) {
+      mainLoops(loops), globalVariables(globals),
+      enableLoopParallelization(enableLoops) {
     buildDependencyGraph();
 }
 
@@ -79,7 +81,7 @@ void HybridParallelizer::buildDependencyGraph() {
                 for (const auto& writeVar : analysisA.writeSet) {
                     if (analysisB.readSet.count(writeVar)) {
                         hasDependency = true;
-                        reason = "Global variable WAR: " + writeVar;
+                        reason = "Global variable RAW: " + writeVar;
                         break;
                     }
                 }
@@ -98,7 +100,7 @@ void HybridParallelizer::buildDependencyGraph() {
                     for (const auto& readVar : analysisA.readSet) {
                         if (analysisB.writeSet.count(readVar)) {
                             hasDependency = true;
-                            reason = "Global variable RAW: " + readVar;
+                            reason = "Global variable WAR: " + readVar;
                             break;
                         }
                     }
@@ -180,7 +182,8 @@ std::string HybridParallelizer::extractFunctionCall(const std::string& originalC
 std::string HybridParallelizer::generateParallelizedFunctionBody(const FunctionInfo& info) {
     std::string parallelizedBody = info.original_body;
     
-    if (info.loops.empty()) {
+    // If loop parallelization is disabled, return original body
+    if (!enableLoopParallelization || info.loops.empty()) {
         return parallelizedBody;
     }
     
@@ -306,8 +309,10 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
                 const FunctionInfo& info = functionInfo.at(call.functionName);
                 
                 mpiCode << "// Parallelized function: " << info.name << "\n";
-                if (info.has_parallelizable_loops) {
+                if (enableLoopParallelization && info.has_parallelizable_loops) {
                     mpiCode << "// Contains parallelizable loops - OpenMP pragmas added\n";
+                } else if (info.has_parallelizable_loops) {
+                    mpiCode << "// Contains loops (OpenMP disabled by --no-loops flag)\n";
                 }
                 
                 // Function signature
@@ -322,7 +327,7 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
                 mpiCode << ") ";
                 
                 // Function body with OpenMP pragmas
-                if (info.has_parallelizable_loops) {
+                if (enableLoopParallelization && info.has_parallelizable_loops) {
                     mpiCode << generateParallelizedFunctionBody(info);
                 } else {
                     mpiCode << info.original_body;
@@ -362,7 +367,7 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
     
     std::set<std::string> functionsWithLoops;
     for (const auto& pair : functionInfo) {
-        if (pair.second.has_parallelizable_loops && pair.first != "main") {
+        if (enableLoopParallelization && pair.second.has_parallelizable_loops && pair.first != "main") {
             functionsWithLoops.insert(pair.first);
         }
     }
@@ -494,6 +499,9 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
     
     // Print loop parallelization summary
     mpiCode << "        std::cout << \"\\n=== Loop Parallelization Summary ===\" << std::endl;\n";
+    if (!enableLoopParallelization) {
+        mpiCode << "        std::cout << \"Loop parallelization DISABLED (--no-loops flag)\" << std::endl;\n";
+    }
     
     // Create a map to track unique loops per function
     std::map<std::string, std::vector<LoopInfo>> uniqueFunctionLoops;
