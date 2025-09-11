@@ -32,7 +32,25 @@ bool ComprehensiveLoopAnalyzer::VisitFunctionDecl(FunctionDecl *FD) {
 
 bool ComprehensiveLoopAnalyzer::VisitForStmt(ForStmt *FS) {
     if (!currentFunction.empty()) {
+        bool wasInLoop = insideLoop;
+        int previousDepth = loopDepth;
+        
+        // Track loop nesting
+        insideLoop = true;
+        loopDepth++;
+        
+        // Process this loop (will check depth for parallelization)
         processForLoop(FS);
+        
+        // Continue traversal to find nested loops, but don't call base class
+        // The base class would bypass our depth tracking
+        RecursiveASTVisitor::TraverseStmt(FS->getBody());
+        
+        // Restore previous state
+        loopDepth = previousDepth;
+        insideLoop = wasInLoop;
+        
+        return true;
     }
     return true;
 }
@@ -97,11 +115,14 @@ void ComprehensiveLoopAnalyzer::processForLoop(ForStmt *FS) {
         }
     }
     
-    // Analyze loop body
+    // Analyze loop body (includes dependency analysis)
     analyzeLoopBody(FS->getBody(), loop);
     
-    // Perform dependency analysis
-    performDependencyAnalysis(loop);
+    // Only parallelize outermost loops (depth 1) in nested structures
+    if (loopDepth > 1) {
+        loop.parallelizable = false;
+        loop.analysis_notes = "Inner loop in nested structure - not parallelized to avoid race conditions.";
+    }
     
     // Generate OpenMP pragma
     if (loop.parallelizable) {
@@ -166,6 +187,7 @@ void ComprehensiveLoopAnalyzer::analyzeLoopBody(Stmt *body, LoopInfo &loop) {
         LoopInfo *loop;
         std::string loopVar;
         std::set<std::string> *globals;
+        std::set<std::string> localVars;  // Track variables declared inside loop
         
         LoopBodyVisitor(LoopInfo *l, const std::string &var, std::set<std::string> *g) 
             : loop(l), loopVar(var), globals(g) {}
@@ -193,11 +215,24 @@ void ComprehensiveLoopAnalyzer::analyzeLoopBody(Stmt *body, LoopInfo &loop) {
             return true;
         }
         
+        bool VisitDeclStmt(DeclStmt *DS) {
+            // Track local variable declarations within the loop
+            for (auto *D : DS->decls()) {
+                if (VarDecl *VD = dyn_cast<VarDecl>(D)) {
+                    localVars.insert(VD->getNameAsString());
+                }
+            }
+            return true;
+        }
+        
         bool VisitCompoundAssignOperator(CompoundAssignOperator *CAO) {
             if (DeclRefExpr *LHS = dyn_cast<DeclRefExpr>(CAO->getLHS()->IgnoreImpCasts())) {
                 if (VarDecl *VD = dyn_cast<VarDecl>(LHS->getDecl())) {
                     std::string varName = VD->getNameAsString();
-                    loop->reduction_vars.push_back(varName);
+                    // Only add to reduction if it's NOT a local variable declared inside the loop
+                    if (localVars.find(varName) == localVars.end()) {
+                        loop->reduction_vars.push_back(varName);
+                    }
                     
                     // Determine reduction operation
                     switch (CAO->getOpcode()) {
@@ -279,9 +314,12 @@ void ComprehensiveLoopAnalyzer::analyzeLoopBody(Stmt *body, LoopInfo &loop) {
     
     LoopBodyVisitor visitor(&loop, loop.loop_variable, &globalVariables);
     visitor.TraverseStmt(body);
+    
+    // Pass local variables to dependency analysis
+    performDependencyAnalysis(loop, visitor.localVars);
 }
 
-void ComprehensiveLoopAnalyzer::performDependencyAnalysis(LoopInfo &loop) {
+void ComprehensiveLoopAnalyzer::performDependencyAnalysis(LoopInfo &loop, const std::set<std::string> &localVars) {
     // Remove duplicates
     std::sort(loop.read_vars.begin(), loop.read_vars.end());
     loop.read_vars.erase(std::unique(loop.read_vars.begin(), loop.read_vars.end()), loop.read_vars.end());
@@ -324,8 +362,9 @@ void ComprehensiveLoopAnalyzer::performDependencyAnalysis(LoopInfo &loop) {
         std::smatch match;
         if (std::regex_search(code, match, sum_pattern)) {
             std::string var = match[1];
-            // Make sure this variable is not an array element
-            if (!std::regex_search(code, std::regex(var + R"(\s*\[)"))) {
+            // Make sure this variable is not an array element and not a local variable
+            if (!std::regex_search(code, std::regex(var + R"(\s*\[)")) && 
+                localVars.find(var) == localVars.end()) {
                 loop.reduction_vars.push_back(var);
                 loop.reduction_op = "+";
             }

@@ -35,7 +35,7 @@ private:
     void processWhileLoop(clang::WhileStmt *WS);
     void processDoWhileLoop(clang::DoStmt *DS);
     void analyzeLoopBody(clang::Stmt *body, LoopInfo &loop);
-    void performDependencyAnalysis(LoopInfo &loop);
+    void performDependencyAnalysis(LoopInfo &loop, const std::set<std::string> &localVars = std::set<std::string>());
     std::string generateOpenMPPragma(const LoopInfo& loop);
     std::string getSourceText(clang::SourceRange range);
 };
