@@ -20,6 +20,7 @@ private:
     std::string normalizeType(const std::string& cppType);
     std::string getMPIDatatype(const std::string& cppType);
     std::string getDefaultValue(const std::string& cppType);
+    bool isTypePrintable(const std::string& cppType);
     std::string extractFunctionCall(const std::string& originalCall);
     std::string generateParallelizedFunctionBody(const FunctionInfo& info);
     

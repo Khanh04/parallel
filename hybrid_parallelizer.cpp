@@ -33,7 +33,16 @@ std::string HybridParallelizer::getMPIDatatype(const std::string& cppType) {
     if (normalizedType == "long") return "MPI_LONG";
     if (normalizedType == "unsigned int") return "MPI_UNSIGNED";
     if (normalizedType == "long long") return "MPI_LONG_LONG";
-    return "MPI_INT";
+    
+    // Check for unsupported complex types
+    if (normalizedType.find("std::chrono") != std::string::npos ||
+        normalizedType.find("__enable_if_is_duration") != std::string::npos ||
+        normalizedType.find("std::") != std::string::npos ||
+        normalizedType.find("::") != std::string::npos) {
+        return ""; // Return empty string to indicate unsupported type
+    }
+    
+    return "MPI_INT"; // Only for simple unrecognized types
 }
 
 std::string HybridParallelizer::getDefaultValue(const std::string& cppType) {
@@ -46,7 +55,44 @@ std::string HybridParallelizer::getDefaultValue(const std::string& cppType) {
     if (normalizedType == "long") return "0L";
     if (normalizedType == "unsigned int") return "0U";
     if (normalizedType == "long long") return "0LL";
+    
+    // Handle complex types that can't be initialized with simple values
+    if (normalizedType.find("std::chrono") != std::string::npos) {
+        return "std::chrono::system_clock::time_point{}";
+    }
+    if (normalizedType.find("std::string") != std::string::npos) {
+        return "\"\"";
+    }
+    if (normalizedType.find("std::") != std::string::npos) {
+        return normalizedType + "{}"; // Default construction for STL types
+    }
+    
     return "0";
+}
+
+bool HybridParallelizer::isTypePrintable(const std::string& cppType) {
+    std::string normalizedType = normalizeType(cppType);
+    
+    // Basic types that are printable
+    if (normalizedType == "int" || normalizedType == "double" || normalizedType == "float" ||
+        normalizedType == "bool" || normalizedType == "char" || normalizedType == "long" ||
+        normalizedType == "unsigned int" || normalizedType == "long long") {
+        return true;
+    }
+    
+    // std::string is printable
+    if (normalizedType.find("std::string") != std::string::npos) {
+        return true;
+    }
+    
+    // Complex types like std::chrono are not directly printable
+    if (normalizedType.find("std::chrono") != std::string::npos ||
+        normalizedType.find("std::") != std::string::npos ||
+        normalizedType.find("::") != std::string::npos) {
+        return false;
+    }
+    
+    return true; // Assume unknown simple types are printable
 }
 
 void HybridParallelizer::buildDependencyGraph() {
@@ -309,7 +355,9 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
     mpiCode << "#include <iostream>\n";
     mpiCode << "#include <vector>\n";
     mpiCode << "#include <cmath>\n";
-    mpiCode << "#include <time.h>\n\n";
+    mpiCode << "#include <time.h>\n";
+    mpiCode << "#include <chrono>\n";
+    mpiCode << "#include <string>\n\n";
     
     // Add global variables if any functions use them
     bool hasGlobalReads = false;
@@ -470,21 +518,35 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
             }
             mpiCode << "    }\n";
         } else {
-            // Parallel execution with MPI for multiple functions
+            // Robust parallel execution with dynamic process assignment
+            mpiCode << "    // Dynamic process assignment to avoid deadlocks\n";
+            mpiCode << "    int effective_processes = std::min(size, (int)" << group.size() << ");\n";
+            
+            // Calculate all process assignments upfront
             for (int i = 0; i < group.size(); ++i) {
                 int callIdx = group[i];
-                mpiCode << "    if (rank == " << i << " && " << i << " < size) {\n";
+                mpiCode << "    int assigned_rank_" << callIdx << " = " << i << " % effective_processes;\n";
+            }
+            
+            for (int i = 0; i < group.size(); ++i) {
+                int callIdx = group[i];
+                mpiCode << "    if (rank == assigned_rank_" << callIdx << ") {\n";
                 
                 if (functionCalls[callIdx].hasReturnValue) {
                     std::string originalCall = functionCalls[callIdx].callExpression;
                     std::string funcCall = extractFunctionCall(originalCall);
                     mpiCode << "        result_" << callIdx << " = " << funcCall << ";\n";
                     
-                    if (i != 0) {
-                        std::string mpiType = getMPIDatatype(functionCalls[callIdx].returnType);
-                        mpiCode << "        MPI_Send(&result_" << callIdx 
+                    // Send result to rank 0 if this process is not rank 0
+                    mpiCode << "        if (assigned_rank_" << callIdx << " != 0) {\n";
+                    std::string mpiType = getMPIDatatype(functionCalls[callIdx].returnType);
+                    if (!mpiType.empty()) {
+                        mpiCode << "            MPI_Send(&result_" << callIdx 
                                << ", 1, " << mpiType << ", 0, " << callIdx << ", MPI_COMM_WORLD);\n";
+                    } else {
+                        mpiCode << "            // Skipping MPI_Send for unsupported type: " << functionCalls[callIdx].returnType << "\n";
                     }
+                    mpiCode << "        }\n";
                 } else {
                     std::string originalCall = functionCalls[callIdx].callExpression;
                     if (!originalCall.empty() && originalCall.back() == ';') {
@@ -495,17 +557,22 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
                 mpiCode << "    }\n";
             }
             
-            // Collect results in rank 0
+            // Collect results in rank 0 using dynamic assignment
             mpiCode << "    if (rank == 0) {\n";
-            for (int i = 1; i < group.size(); ++i) {
+            for (int i = 0; i < group.size(); ++i) {
                 int callIdx = group[i];
                 if (functionCalls[callIdx].hasReturnValue) {
                     std::string mpiType = getMPIDatatype(functionCalls[callIdx].returnType);
-                    mpiCode << "        if (" << i << " < size) {\n";
-                    mpiCode << "            MPI_Recv(&result_" << callIdx 
-                           << ", 1, " << mpiType << ", " << i << ", " << callIdx 
-                           << ", MPI_COMM_WORLD, MPI_STATUS_IGNORE);\n";
-                    mpiCode << "        }\n";
+                    if (!mpiType.empty()) {
+                        // Only receive if function is assigned to a different rank
+                        mpiCode << "        if (assigned_rank_" << callIdx << " != 0) {\n";
+                        mpiCode << "            MPI_Recv(&result_" << callIdx 
+                               << ", 1, " << mpiType << ", assigned_rank_" << callIdx << ", " << callIdx 
+                               << ", MPI_COMM_WORLD, MPI_STATUS_IGNORE);\n";
+                        mpiCode << "        }\n";
+                    } else {
+                        mpiCode << "        // Skipping MPI_Recv for unsupported type: " << functionCalls[callIdx].returnType << "\n";
+                    }
                 }
             }
             
@@ -531,7 +598,11 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
         for (const std::string& varName : variablesToBroadcast) {
             if (localVariables.count(varName)) {
                 std::string mpiType = getMPIDatatype(localVariables.at(varName).type);
-                mpiCode << "    MPI_Bcast(&" << varName << ", 1, " << mpiType << ", 0, MPI_COMM_WORLD);\n";
+                if (!mpiType.empty()) {
+                    mpiCode << "    MPI_Bcast(&" << varName << ", 1, " << mpiType << ", 0, MPI_COMM_WORLD);\n";
+                } else {
+                    mpiCode << "    // Skipping MPI_Bcast for unsupported type: " << localVariables.at(varName).type << "\n";
+                }
             }
         }
         
@@ -592,7 +663,7 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
     
     for (const auto& pair : localVariables) {
         const LocalVariable& localVar = pair.second;
-        if (localVar.definedAtCall >= 0 && printedVars.find(localVar.name) == printedVars.end()) {
+        if (localVar.definedAtCall >= 0 && printedVars.find(localVar.name) == printedVars.end() && isTypePrintable(localVar.type)) {
             mpiCode << "        std::cout << \"" << localVar.name << " = \" << " << localVar.name << " << std::endl;\n";
             printedVars.insert(localVar.name);
         }
@@ -602,7 +673,7 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
     for (int i = 0; i < functionCalls.size(); ++i) {
         if (functionCalls[i].hasReturnValue) {
             std::string varName = functionCalls[i].returnVariable;
-            if (!varName.empty() && printedVars.find(varName) == printedVars.end()) {
+            if (!varName.empty() && printedVars.find(varName) == printedVars.end() && isTypePrintable(functionCalls[i].returnType)) {
                 mpiCode << "        std::cout << \"" << varName << " = \" << " << varName << " << std::endl;\n";
                 printedVars.insert(varName);
             } else if (varName.empty()) {

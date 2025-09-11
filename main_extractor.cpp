@@ -1,5 +1,6 @@
 #include "main_extractor.h"
 #include "clang/Lex/Lexer.h"
+#include <set>
 
 using namespace clang;
 
@@ -170,13 +171,79 @@ void MainFunctionExtractor::analyzeLocalDependencies() {
 }
 
 bool MainFunctionExtractor::isUserFunction(const std::string& funcName) {
-    return funcName != "printf" && funcName != "scanf" && 
-           funcName != "malloc" && funcName != "free" &&
-           funcName != "sleep" && funcName.find("std::") == std::string::npos &&
-           funcName.find("cout") == std::string::npos &&
-           funcName.find("endl") == std::string::npos &&
-           funcName.find("operator") == std::string::npos &&
-           funcName.find("__") != 0;
+    // Standard C library functions (stdio.h, stdlib.h, string.h, math.h, time.h)
+    static const std::set<std::string> standardLibFunctions = {
+        // stdio.h
+        "printf", "scanf", "fprintf", "fscanf", "sprintf", "sscanf",
+        "fopen", "fclose", "fread", "fwrite", "fgetc", "fputc", "fgets", "fputs",
+        "getchar", "putchar", "gets", "puts", "perror", "fflush", "fseek", "ftell",
+        
+        // stdlib.h  
+        "malloc", "calloc", "realloc", "free", "exit", "abort", "atexit",
+        "system", "getenv", "setenv", "rand", "srand", "abs", "labs", "div", "ldiv",
+        "atoi", "atol", "atof", "strtol", "strtod", "qsort", "bsearch",
+        
+        // string.h
+        "strlen", "strcpy", "strncpy", "strcat", "strncat", "strcmp", "strncmp",
+        "strchr", "strrchr", "strstr", "strspn", "strcspn", "strpbrk", "strtok",
+        "memcpy", "memmove", "memcmp", "memchr", "memset",
+        
+        // math.h
+        "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh", "cosh", "tanh",
+        "exp", "log", "log10", "pow", "sqrt", "ceil", "floor", "fabs", "fmod",
+        "frexp", "ldexp", "modf",
+        
+        // time.h
+        "time", "clock", "difftime", "mktime", "strftime", "localtime", "gmtime",
+        "asctime", "ctime", "sleep", "usleep",
+        
+        // unistd.h
+        "read", "write", "close", "lseek", "access", "unlink", "getpid", "fork",
+        "exec", "execl", "execv", "execve", "wait", "waitpid",
+        
+        // Common system functions
+        "open", "creat", "dup", "dup2", "pipe", "chdir", "getcwd", "mkdir", "rmdir",
+        
+        // C++ standard library internal functions 
+        "now", "count", "size", "begin", "end", "data", "empty", "clear",
+        
+        // Compiler intrinsics and operators
+        "operator", "__builtin", "__sync", "__atomic"
+    };
+    
+    // Check if it's a known standard library function
+    if (standardLibFunctions.count(funcName)) {
+        return false;
+    }
+    
+    // Filter out std:: namespace functions
+    if (funcName.find("std::") != std::string::npos) {
+        return false;
+    }
+    
+    // Filter out iostream operators and functions
+    if (funcName.find("cout") != std::string::npos || 
+        funcName.find("endl") != std::string::npos ||
+        funcName.find("cin") != std::string::npos) {
+        return false;
+    }
+    
+    // Filter out operator overloads
+    if (funcName.find("operator") != std::string::npos) {
+        return false;
+    }
+    
+    // Filter out compiler/system internal functions (starting with __)
+    if (funcName.find("__") == 0) {
+        return false;
+    }
+    
+    // Filter out templated function names (contain < or >)
+    if (funcName.find("<") != std::string::npos || funcName.find(">") != std::string::npos) {
+        return false;
+    }
+    
+    return true;
 }
 
 void MainFunctionExtractor::findUsedVariables(Expr *expr, std::set<std::string>& usedVars) {
