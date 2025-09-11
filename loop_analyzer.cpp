@@ -408,9 +408,9 @@ void ComprehensiveLoopAnalyzer::performDependencyAnalysis(LoopInfo &loop, const 
             loop.analysis_notes += "Contains break/continue statements - not parallelizable. ";
         }
         
-        if (loop.has_complex_condition) {
-            loop.parallelizable = false;
-            loop.analysis_notes += "Complex loop condition - not parallelizable. ";
+        if (!loop.reduction_vars.empty()) {
+            loop.parallelizable = true;
+            loop.analysis_notes += "Contains reduction operations - parallelizable with reduction clause. ";
         }
         
         if (loop.has_dependencies && loop.reduction_vars.empty()) {
@@ -418,9 +418,10 @@ void ComprehensiveLoopAnalyzer::performDependencyAnalysis(LoopInfo &loop, const 
             loop.analysis_notes += "Has loop-carried dependencies - not parallelizable. ";
         }
         
-        if (!loop.reduction_vars.empty()) {
-            loop.parallelizable = true;
-            loop.analysis_notes += "Contains reduction operations - parallelizable with reduction clause. ";
+        // Complex conditions are blocking - they override any other considerations
+        if (loop.has_complex_condition) {
+            loop.parallelizable = false;
+            loop.analysis_notes += "Complex loop condition - not parallelizable. ";
         }
         
         if (loop.is_nested && loop.parallelizable) {

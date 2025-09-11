@@ -206,6 +206,8 @@ bool MainFunctionExtractor::isUserFunction(const std::string& funcName) {
         
         // C++ standard library internal functions 
         "now", "count", "size", "begin", "end", "data", "empty", "clear",
+        "push_back", "pop_back", "insert", "erase", "find", "reserve", "resize",
+        "at", "front", "back", "emplace", "emplace_back", "shrink_to_fit",
         
         // Compiler intrinsics and operators
         "operator", "__builtin", "__sync", "__atomic"

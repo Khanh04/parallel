@@ -28,6 +28,7 @@ private:
     void printEnhancedAnalysisResults(const HybridParallelizer& parallelizer);
     void generateDependencyGraphVisualization(const HybridParallelizer& parallelizer);
     void generateGraphvizDependencyGraph(const HybridParallelizer& parallelizer);
+    std::string extractOriginalIncludes(clang::ASTContext &Context);
 };
 
 class HybridParallelizerAction : public clang::ASTFrontendAction {

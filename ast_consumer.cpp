@@ -1,9 +1,11 @@
 #include "ast_consumer.h"
 #include "clang/AST/ASTContext.h"
 #include "llvm/Support/raw_ostream.h"
+#include "clang/Lex/Preprocessor.h"
 #include <memory>
 #include <fstream>
 #include <algorithm>
+#include <sstream>
 
 // External declaration for global flag
 extern bool enableLoopParallelization;
@@ -38,6 +40,9 @@ void HybridParallelizerConsumer::HandleTranslationUnit(ASTContext &Context) {
     mainExtractor.setFunctionAnalysis(&functionAnalyzer.functionAnalysis);
     mainExtractor.TraverseDecl(TU);
     
+    // Extract original includes from source file
+    std::string originalIncludes = extractOriginalIncludes(Context);
+    
     // Perform parallelization analysis
     HybridParallelizer parallelizer(mainExtractor.functionCalls, 
                                    functionAnalyzer.functionAnalysis,
@@ -45,6 +50,7 @@ void HybridParallelizerConsumer::HandleTranslationUnit(ASTContext &Context) {
                                    functionAnalyzer.functionInfo,
                                    mainExtractor.getMainLoops(),
                                    globalCollector.globalVariables,
+                                   originalIncludes,
                                    enableLoopParallelization);
     
     // Generate output
@@ -457,6 +463,45 @@ void HybridParallelizerConsumer::generateGraphvizDependencyGraph(const HybridPar
     llvm::outs() << "Graphviz DOT file generated: dependency_graph.dot\n";
     llvm::outs() << "To generate PNG: dot -Tpng dependency_graph.dot -o dependency_graph.png\n";
     llvm::outs() << "To generate SVG: dot -Tsvg dependency_graph.dot -o dependency_graph.svg\n";
+}
+
+std::string HybridParallelizerConsumer::extractOriginalIncludes(ASTContext &Context) {
+    SourceManager &SM = Context.getSourceManager();
+    const FileEntry *MainFileEntry = SM.getFileEntryForID(SM.getMainFileID());
+    
+    if (!MainFileEntry) {
+        return "";
+    }
+    
+    // Get the buffer for the main file
+    auto Buffer = SM.getBufferOrNone(SM.getMainFileID());
+    if (!Buffer) {
+        return "";
+    }
+    
+    std::string FileContent = Buffer->getBuffer().str();
+    std::stringstream includes;
+    std::istringstream stream(FileContent);
+    std::string line;
+    
+    // Extract all #include lines from the beginning of the file
+    while (std::getline(stream, line)) {
+        // Trim whitespace
+        line.erase(0, line.find_first_not_of(" \t"));
+        line.erase(line.find_last_not_of(" \t\r\n") + 1);
+        
+        if (line.empty()) {
+            continue; // Skip empty lines
+        } else if (line.find("#include") == 0) {
+            includes << line << "\n";
+        } else if (line.find("#") != 0 && !line.empty()) {
+            // If we hit non-preprocessor directive (except comments), stop looking for includes
+            break;
+        }
+        // Skip comments and other preprocessor directives but continue looking
+    }
+    
+    return includes.str();
 }
 
 std::unique_ptr<ASTConsumer> HybridParallelizerAction::CreateASTConsumer(CompilerInstance &CI,

@@ -60,6 +60,11 @@ bool ComprehensiveFunctionAnalyzer::VisitFunctionDecl(FunctionDecl *FD) {
     if (FD->hasBody()) {
         std::string funcName = FD->getNameAsString();
         
+        // Skip functions with empty names (anonymous functions, lambdas, etc.)
+        if (funcName.empty()) {
+            return true;
+        }
+        
         // Skip functions from system headers - only analyze user code
         SourceLocation loc = FD->getBeginLoc();
         if (SM->isInSystemHeader(loc)) {
@@ -89,7 +94,20 @@ bool ComprehensiveFunctionAnalyzer::VisitFunctionDecl(FunctionDecl *FD) {
             ParmVarDecl *param = FD->getParamDecl(i);
             std::string paramName = param->getNameAsString();
             std::string paramType = param->getType().getAsString();
-            currentFunctionParams.insert(paramName);
+            
+            // Handle function pointer types specially
+            if (param->getType()->isFunctionPointerType()) {
+                // For function pointers, we need to insert the parameter name properly
+                // Convert "double (*)(double)" to "double (*paramName)(double)"
+                size_t pos = paramType.find("(*)(");
+                if (pos != std::string::npos) {
+                    paramType.insert(pos + 2, paramName);
+                    // Clear parameter name since it's now embedded in the type
+                    paramName = "";
+                }
+            }
+            
+            currentFunctionParams.insert(paramName.empty() ? ("param" + std::to_string(i)) : paramName);
             info.parameter_names.push_back(paramName);
             info.parameter_types.push_back(paramType);
             functionAnalysis[currentFunction].parameterTypes.push_back(paramType);

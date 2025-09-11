@@ -16,6 +16,7 @@ private:
     std::vector<LoopInfo> mainLoops;
     std::set<std::string> globalVariables;
     bool enableLoopParallelization;
+    std::string originalIncludes;
     
     std::string normalizeType(const std::string& cppType);
     std::string getMPIDatatype(const std::string& cppType);
@@ -31,6 +32,7 @@ public:
                       const std::map<std::string, FunctionInfo>& funcInfo,
                       const std::vector<LoopInfo>& loops,
                       const std::set<std::string>& globals,
+                      const std::string& includes = "",
                       bool enableLoops = true);
     
     void buildDependencyGraph();

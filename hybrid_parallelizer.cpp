@@ -10,11 +10,12 @@ HybridParallelizer::HybridParallelizer(const std::vector<FunctionCall>& calls,
                                      const std::map<std::string, FunctionInfo>& funcInfo,
                                      const std::vector<LoopInfo>& loops,
                                      const std::set<std::string>& globals,
+                                     const std::string& includes,
                                      bool enableLoops)
     : functionCalls(calls), functionAnalysis(analysis), 
       localVariables(localVars), functionInfo(funcInfo),
       mainLoops(loops), globalVariables(globals),
-      enableLoopParallelization(enableLoops) {
+      originalIncludes(includes), enableLoopParallelization(enableLoops) {
     buildDependencyGraph();
 }
 
@@ -348,16 +349,25 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
     
     std::stringstream mpiCode;
     
-    // Headers
+    // Headers - use original includes and add required MPI/OpenMP headers
     mpiCode << "#include <mpi.h>\n";
     mpiCode << "#include <omp.h>\n";
-    mpiCode << "#include <stdio.h>\n";
-    mpiCode << "#include <iostream>\n";
-    mpiCode << "#include <vector>\n";
-    mpiCode << "#include <cmath>\n";
-    mpiCode << "#include <time.h>\n";
-    mpiCode << "#include <chrono>\n";
-    mpiCode << "#include <string>\n\n";
+    if (!originalIncludes.empty()) {
+        mpiCode << originalIncludes;
+        if (originalIncludes.back() != '\n') {
+            mpiCode << "\n";
+        }
+    } else {
+        // Fallback headers if no original includes provided
+        mpiCode << "#include <stdio.h>\n";
+        mpiCode << "#include <iostream>\n";
+        mpiCode << "#include <vector>\n";
+        mpiCode << "#include <cmath>\n";
+        mpiCode << "#include <time.h>\n";
+        mpiCode << "#include <chrono>\n";
+        mpiCode << "#include <string>\n";
+    }
+    mpiCode << "\n";
     
     // Add global variables if any functions use them
     bool hasGlobalReads = false;
@@ -395,52 +405,63 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
     
     // Output parallelized function definitions
     std::set<std::string> outputFunctions;
+    
+    // First, include all functions directly called in main
     for (const auto& call : functionCalls) {
-        if (outputFunctions.find(call.functionName) == outputFunctions.end()) {
-            outputFunctions.insert(call.functionName);
+        outputFunctions.insert(call.functionName);
+    }
+    
+    // Then, include all other analyzed functions (like utility functions used as parameters)
+    for (const auto& funcPair : functionInfo) {
+        const std::string& funcName = funcPair.first;
+        if (funcName != "main" && !funcName.empty()) { // Skip main function and empty names
+            outputFunctions.insert(funcName);
+        }
+    }
+    
+    // Generate code for all functions
+    for (const std::string& funcName : outputFunctions) {
+        if (functionInfo.count(funcName)) {
+            const FunctionInfo& info = functionInfo.at(funcName);
             
-            if (functionInfo.count(call.functionName)) {
-                const FunctionInfo& info = functionInfo.at(call.functionName);
-                
-                mpiCode << "// Parallelized function: " << info.name << "\n";
-                if (enableLoopParallelization && info.has_parallelizable_loops) {
-                    mpiCode << "// Contains parallelizable loops - OpenMP pragmas added\n";
-                } else if (info.has_parallelizable_loops) {
-                    mpiCode << "// Contains loops (OpenMP disabled by --no-loops flag)\n";
-                }
-                
-                // Function signature
-                mpiCode << info.return_type << " " << info.name << "(";
-                for (size_t i = 0; i < info.parameter_types.size(); i++) {
-                    if (i > 0) mpiCode << ", ";
-                    mpiCode << info.parameter_types[i];
-                    if (i < info.parameter_names.size()) {
-                        mpiCode << " " << info.parameter_names[i];
-                    }
-                }
-                mpiCode << ") ";
-                
-                // Function body with OpenMP pragmas
-                if (enableLoopParallelization && info.has_parallelizable_loops) {
-                    mpiCode << generateParallelizedFunctionBody(info);
-                } else {
-                    mpiCode << info.original_body;
-                }
-                mpiCode << "\n\n";
-            } else {
-                std::string returnType = "int";
-                if (functionAnalysis.count(call.functionName)) {
-                    returnType = normalizeType(functionAnalysis.at(call.functionName).returnType);
-                }
-                
-                mpiCode << "// Function definition not found for: " << call.functionName << "\n";
-                mpiCode << returnType << " " << call.functionName << "() {\n";
-                mpiCode << "    printf(\"Executing " << call.functionName << "\\n\");\n";
-                if (returnType != "void") {
-                    mpiCode << "    return " << getDefaultValue(returnType) << ";\n";
-                }
-                mpiCode << "}\n\n";
+            mpiCode << "// Parallelized function: " << info.name << "\n";
+            if (enableLoopParallelization && info.has_parallelizable_loops) {
+                mpiCode << "// Contains parallelizable loops - OpenMP pragmas added\n";
+            } else if (info.has_parallelizable_loops) {
+                mpiCode << "// Contains loops (OpenMP disabled by --no-loops flag)\n";
             }
+            
+            // Function signature
+            mpiCode << info.return_type << " " << info.name << "(";
+            for (size_t i = 0; i < info.parameter_types.size(); i++) {
+                if (i > 0) mpiCode << ", ";
+                mpiCode << info.parameter_types[i];
+                if (i < info.parameter_names.size() && !info.parameter_names[i].empty()) {
+                    mpiCode << " " << info.parameter_names[i];
+                }
+            }
+            mpiCode << ") ";
+            
+            // Function body with OpenMP pragmas
+            if (enableLoopParallelization && info.has_parallelizable_loops) {
+                mpiCode << generateParallelizedFunctionBody(info);
+            } else {
+                mpiCode << info.original_body;
+            }
+            mpiCode << "\n\n";
+        } else {
+            std::string returnType = "int";
+            if (functionAnalysis.count(funcName)) {
+                returnType = normalizeType(functionAnalysis.at(funcName).returnType);
+            }
+            
+            mpiCode << "// Function definition not found for: " << funcName << "\n";
+            mpiCode << returnType << " " << funcName << "() {\n";
+            mpiCode << "    printf(\"Executing " << funcName << "\\n\");\n";
+            if (returnType != "void") {
+                mpiCode << "    return " << getDefaultValue(returnType) << ";\n";
+            }
+            mpiCode << "}\n\n";
         }
     }
     
