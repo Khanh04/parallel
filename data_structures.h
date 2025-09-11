@@ -65,6 +65,8 @@ struct FunctionCall {
 struct LocalVariable {
     std::string name;
     std::string type;
+    std::string initializationValue;  // Store the original initialization expression
+    int declarationOrder;  // Order in which variable was declared in source
     int definedAtCall;
     std::set<int> usedInCalls;
     bool isParameter;

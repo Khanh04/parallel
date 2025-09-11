@@ -17,6 +17,7 @@ public:
     std::map<std::string, LocalVariable> localVariables;
     std::map<std::string, FunctionAnalysis>* functionAnalysisPtr;
     std::vector<LoopInfo> mainLoops; // Loops found in main function
+    int variableDeclarationCounter;  // Track declaration order
     
     MainFunctionExtractor(clang::SourceManager *sourceManager);
     

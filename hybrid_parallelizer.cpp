@@ -492,12 +492,44 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
     }
     mpiCode << "    }\n\n";
     
-    // Generate local variables
-    mpiCode << "    // Local variables from original main function\n";
+    // Generate local variables in original declaration order
+    mpiCode << "    // Local variables from original main function (ordered by source)\n";
+    std::map<std::string, std::string> variableNameMap; // Track renamed variables
+    
+    // Convert map to vector and sort by declaration order
+    std::vector<std::pair<std::string, LocalVariable>> orderedVariables;
     for (const auto& pair : localVariables) {
+        orderedVariables.push_back(pair);
+    }
+    std::sort(orderedVariables.begin(), orderedVariables.end(),
+              [](const auto& a, const auto& b) {
+                  return a.second.declarationOrder < b.second.declarationOrder;
+              });
+    
+    for (const auto& pair : orderedVariables) {
         const LocalVariable& localVar = pair.second;
-        std::string defaultValue = getDefaultValue(localVar.type);
-        mpiCode << "    " << localVar.type << " " << localVar.name << " = " << defaultValue << ";\n";
+        std::string resolvedName = resolveVariableNameConflict(localVar.name);
+        
+        // Use original initialization value if available, otherwise use default
+        if (!localVar.initializationValue.empty()) {
+            // Substitute any variable references within the initialization value
+            std::string initValue = substituteVariableNames(localVar.initializationValue, variableNameMap);
+            
+            // Handle constructor syntax - detect if it looks like a constructor call
+            if (initValue.find("(") != std::string::npos && initValue.find(resolvedName + "(") == 0) {
+                // This is constructor syntax like "matrix(size, std::vector<double>(size, 1.0))"
+                // Convert to proper constructor call
+                std::string constructorArgs = initValue.substr(resolvedName.length());
+                mpiCode << "    " << localVar.type << " " << resolvedName << constructorArgs << ";\n";
+            } else {
+                // Regular assignment syntax
+                mpiCode << "    " << localVar.type << " " << resolvedName << " = " << initValue << ";\n";
+            }
+        } else {
+            // No explicit initialization - use default constructor
+            mpiCode << "    " << localVar.type << " " << resolvedName << ";\n";
+        }
+        variableNameMap[localVar.name] = resolvedName; // Store the mapping
     }
     mpiCode << "\n";
     
@@ -526,16 +558,19 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
             
             if (functionCalls[callIdx].hasReturnValue) {
                 std::string originalCall = functionCalls[callIdx].callExpression;
-                mpiCode << "        result_" << callIdx << " = " << extractFunctionCall(originalCall) << ";\n";
+                std::string substitutedCall = substituteVariableNames(originalCall, variableNameMap);
+                mpiCode << "        result_" << callIdx << " = " << extractFunctionCall(substitutedCall) << ";\n";
                 if (!functionCalls[callIdx].returnVariable.empty()) {
-                    mpiCode << "        " << functionCalls[callIdx].returnVariable << " = result_" << callIdx << ";\n";
+                    std::string resolvedReturnVar = resolveVariableNameConflict(functionCalls[callIdx].returnVariable);
+                    mpiCode << "        " << resolvedReturnVar << " = result_" << callIdx << ";\n";
                 }
             } else {
                 std::string originalCall = functionCalls[callIdx].callExpression;
-                if (!originalCall.empty() && originalCall.back() == ';') {
-                    originalCall.pop_back();
+                std::string substitutedCall = substituteVariableNames(originalCall, variableNameMap);
+                if (!substitutedCall.empty() && substitutedCall.back() == ';') {
+                    substitutedCall.pop_back();
                 }
-                mpiCode << "        " << originalCall << ";\n";
+                mpiCode << "        " << substitutedCall << ";\n";
             }
             mpiCode << "    }\n";
         } else {
@@ -555,7 +590,8 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
                 
                 if (functionCalls[callIdx].hasReturnValue) {
                     std::string originalCall = functionCalls[callIdx].callExpression;
-                    std::string funcCall = extractFunctionCall(originalCall);
+                    std::string substitutedCall = substituteVariableNames(originalCall, variableNameMap);
+                    std::string funcCall = extractFunctionCall(substitutedCall);
                     mpiCode << "        result_" << callIdx << " = " << funcCall << ";\n";
                     
                     // Send result to rank 0 if this process is not rank 0
@@ -570,10 +606,11 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
                     mpiCode << "        }\n";
                 } else {
                     std::string originalCall = functionCalls[callIdx].callExpression;
-                    if (!originalCall.empty() && originalCall.back() == ';') {
-                        originalCall.pop_back();
+                    std::string substitutedCall = substituteVariableNames(originalCall, variableNameMap);
+                    if (!substitutedCall.empty() && substitutedCall.back() == ';') {
+                        substitutedCall.pop_back();
                     }
-                    mpiCode << "        " << originalCall << ";\n";
+                    mpiCode << "        " << substitutedCall << ";\n";
                 }
                 mpiCode << "    }\n";
             }
@@ -600,7 +637,8 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
             for (int i = 0; i < group.size(); ++i) {
                 int callIdx = group[i];
                 if (functionCalls[callIdx].hasReturnValue && !functionCalls[callIdx].returnVariable.empty()) {
-                    mpiCode << "        " << functionCalls[callIdx].returnVariable << " = result_" << callIdx << ";\n";
+                    std::string resolvedReturnVar = resolveVariableNameConflict(functionCalls[callIdx].returnVariable);
+                    mpiCode << "        " << resolvedReturnVar << " = result_" << callIdx << ";\n";
                 }
             }
             mpiCode << "    }\n";
@@ -612,17 +650,27 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
         for (int i = 0; i < group.size(); ++i) {
             int callIdx = group[i];
             if (functionCalls[callIdx].hasReturnValue && !functionCalls[callIdx].returnVariable.empty()) {
-                variablesToBroadcast.insert(functionCalls[callIdx].returnVariable);
+                std::string resolvedReturnVar = resolveVariableNameConflict(functionCalls[callIdx].returnVariable);
+                variablesToBroadcast.insert(resolvedReturnVar);
             }
         }
         
         for (const std::string& varName : variablesToBroadcast) {
-            if (localVariables.count(varName)) {
-                std::string mpiType = getMPIDatatype(localVariables.at(varName).type);
+            // Find the original variable name to get its type
+            std::string originalVarName = varName;
+            for (const auto& mapping : variableNameMap) {
+                if (mapping.second == varName) {
+                    originalVarName = mapping.first;
+                    break;
+                }
+            }
+            
+            if (localVariables.count(originalVarName)) {
+                std::string mpiType = getMPIDatatype(localVariables.at(originalVarName).type);
                 if (!mpiType.empty()) {
                     mpiCode << "    MPI_Bcast(&" << varName << ", 1, " << mpiType << ", 0, MPI_COMM_WORLD);\n";
                 } else {
-                    mpiCode << "    // Skipping MPI_Bcast for unsupported type: " << localVariables.at(varName).type << "\n";
+                    mpiCode << "    // Skipping MPI_Bcast for unsupported type: " << localVariables.at(originalVarName).type << "\n";
                 }
             }
         }
@@ -685,7 +733,8 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
     for (const auto& pair : localVariables) {
         const LocalVariable& localVar = pair.second;
         if (localVar.definedAtCall >= 0 && printedVars.find(localVar.name) == printedVars.end() && isTypePrintable(localVar.type)) {
-            mpiCode << "        std::cout << \"" << localVar.name << " = \" << " << localVar.name << " << std::endl;\n";
+            std::string resolvedName = resolveVariableNameConflict(localVar.name);
+            mpiCode << "        std::cout << \"" << localVar.name << " = \" << " << resolvedName << " << std::endl;\n";
             printedVars.insert(localVar.name);
         }
     }
@@ -695,7 +744,8 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
         if (functionCalls[i].hasReturnValue) {
             std::string varName = functionCalls[i].returnVariable;
             if (!varName.empty() && printedVars.find(varName) == printedVars.end() && isTypePrintable(functionCalls[i].returnType)) {
-                mpiCode << "        std::cout << \"" << varName << " = \" << " << varName << " << std::endl;\n";
+                std::string resolvedVarName = resolveVariableNameConflict(varName);
+                mpiCode << "        std::cout << \"" << varName << " = \" << " << resolvedVarName << " << std::endl;\n";
                 printedVars.insert(varName);
             } else if (varName.empty()) {
                 mpiCode << "        std::cout << \"" << functionCalls[i].functionName 
@@ -712,4 +762,55 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
     mpiCode << "}\n";
     
     return mpiCode.str();
+}
+
+std::string HybridParallelizer::resolveVariableNameConflict(const std::string& originalName) const {
+    // List of MPI reserved variable names
+    static const std::set<std::string> mpiReservedNames = {
+        "rank", "size", "provided", "argc", "argv", "status", "request",
+        "comm", "tag", "source", "dest", "count", "datatype"
+    };
+    
+    // Check if the variable name conflicts with MPI reserved names
+    if (mpiReservedNames.count(originalName)) {
+        return "user_" + originalName;  // Prefix with "user_" to avoid conflict
+    }
+    
+    return originalName;  // No conflict, return original name
+}
+
+std::string HybridParallelizer::substituteVariableNames(const std::string& originalCall, const std::map<std::string, std::string>& variableNameMap) const {
+    std::string result = originalCall;
+    
+    // Replace each variable name with its renamed version
+    for (const auto& pair : variableNameMap) {
+        const std::string& oldName = pair.first;
+        const std::string& newName = pair.second;
+        
+        if (oldName != newName) {  // Only substitute if name actually changed
+            // Use word boundary matching to avoid partial replacements
+            // Replace standalone occurrences of the variable name
+            size_t pos = 0;
+            while ((pos = result.find(oldName, pos)) != std::string::npos) {
+                // Check if this is a complete word (not part of another identifier)
+                bool isWordBoundary = true;
+                if (pos > 0 && (std::isalnum(result[pos - 1]) || result[pos - 1] == '_')) {
+                    isWordBoundary = false;
+                }
+                if (pos + oldName.length() < result.length() && 
+                    (std::isalnum(result[pos + oldName.length()]) || result[pos + oldName.length()] == '_')) {
+                    isWordBoundary = false;
+                }
+                
+                if (isWordBoundary) {
+                    result.replace(pos, oldName.length(), newName);
+                    pos += newName.length();
+                } else {
+                    pos += 1;
+                }
+            }
+        }
+    }
+    
+    return result;
 }

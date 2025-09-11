@@ -5,7 +5,7 @@
 using namespace clang;
 
 MainFunctionExtractor::MainFunctionExtractor(SourceManager *sourceManager) 
-    : SM(sourceManager), functionAnalysisPtr(nullptr) {}
+    : SM(sourceManager), functionAnalysisPtr(nullptr), variableDeclarationCounter(0) {}
 
 void MainFunctionExtractor::setFunctionAnalysis(std::map<std::string, FunctionAnalysis>* analysis) {
     functionAnalysisPtr = analysis;
@@ -51,8 +51,52 @@ void MainFunctionExtractor::collectLocalVariablesInStmt(Stmt *stmt) {
                 LocalVariable localVar;
                 localVar.name = VD->getNameAsString();
                 localVar.type = VD->getType().getAsString();
+                localVar.declarationOrder = variableDeclarationCounter++;
                 localVar.definedAtCall = -1;
                 localVar.isParameter = false;
+                
+                // Extract initialization value if present
+                if (VD->hasInit()) {
+                    // Check if this is an explicit initialization in the source
+                    SourceRange varRange = VD->getSourceRange();
+                    SourceRange initRange = VD->getInit()->getSourceRange();
+                    
+                    // Get the source text for the entire variable declaration
+                    std::string varDeclText = getSourceText(varRange);
+                    
+                    // Check if the declaration contains '=' (assignment) or explicit constructor args
+                    if (varDeclText.find('=') != std::string::npos) {
+                        // This is assignment initialization: "Type var = value"
+                        size_t eqPos = varDeclText.find('=');
+                        std::string initPart = varDeclText.substr(eqPos + 1);
+                        // Remove trailing semicolon and whitespace
+                        while (!initPart.empty() && (initPart.back() == ';' || isspace(initPart.back()))) {
+                            initPart.pop_back();
+                        }
+                        // Remove leading whitespace
+                        size_t start = initPart.find_first_not_of(" \t");
+                        if (start != std::string::npos) {
+                            initPart = initPart.substr(start);
+                        }
+                        localVar.initializationValue = initPart;
+                    } else if (varDeclText.find('(') != std::string::npos && varDeclText.find(')') != std::string::npos) {
+                        // This is constructor initialization: "Type var(args)"
+                        size_t parenStart = varDeclText.find('(');
+                        size_t parenEnd = varDeclText.rfind(')');
+                        if (parenStart != std::string::npos && parenEnd != std::string::npos && parenEnd > parenStart) {
+                            std::string constructorArgs = varDeclText.substr(parenStart, parenEnd - parenStart + 1);
+                            localVar.initializationValue = localVar.name + constructorArgs;
+                        } else {
+                            localVar.initializationValue = ""; // Default constructor
+                        }
+                    } else {
+                        // Default constructor or implicit initialization
+                        localVar.initializationValue = ""; // No explicit initialization
+                    }
+                } else {
+                    localVar.initializationValue = ""; // No initialization
+                }
+                
                 localVariables[localVar.name] = localVar;
             }
         }

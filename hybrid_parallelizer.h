@@ -24,6 +24,8 @@ private:
     bool isTypePrintable(const std::string& cppType);
     std::string extractFunctionCall(const std::string& originalCall);
     std::string generateParallelizedFunctionBody(const FunctionInfo& info);
+    std::string resolveVariableNameConflict(const std::string& originalName) const;
+    std::string substituteVariableNames(const std::string& originalCall, const std::map<std::string, std::string>& variableNameMap) const;
     
 public:
     HybridParallelizer(const std::vector<FunctionCall>& calls, 
