@@ -187,6 +187,40 @@ std::string HybridParallelizer::generateParallelizedFunctionBody(const FunctionI
         return parallelizedBody;
     }
     
+    // First, replace thread-unsafe function calls with thread-safe alternatives
+    for (const auto& loop : info.loops) {
+        if (loop.has_thread_unsafe_calls) {
+            for (const auto& unsafeFunc : loop.unsafe_functions) {
+                if (unsafeFunc == "rand") {
+                    // Replace rand() with rand_r(&__thread_seed)
+                    size_t pos = 0;
+                    while ((pos = parallelizedBody.find("rand()", pos)) != std::string::npos) {
+                        parallelizedBody.replace(pos, 6, "rand_r(&__thread_seed)");
+                        pos += 20; // Length of "rand_r(&__thread_seed)"
+                    }
+                }
+            }
+        }
+    }
+    
+    // Add thread-local variable declarations at the beginning of function
+    bool needsThreadSeed = false;
+    for (const auto& loop : info.loops) {
+        if (loop.thread_local_vars.count("__thread_seed")) {
+            needsThreadSeed = true;
+            break;
+        }
+    }
+    
+    if (needsThreadSeed) {
+        // Insert thread-local seed declaration after opening brace
+        size_t bracePos = parallelizedBody.find('{');
+        if (bracePos != std::string::npos) {
+            std::string seedDecl = "\n    unsigned int __thread_seed = (unsigned int)time(NULL) ^ omp_get_thread_num();";
+            parallelizedBody.insert(bracePos + 1, seedDecl);
+        }
+    }
+    
     // Process loops from last to first to avoid position shifts when inserting
     std::vector<LoopInfo> sortedLoops = info.loops;
     std::sort(sortedLoops.begin(), sortedLoops.end(), 
@@ -209,8 +243,19 @@ std::string HybridParallelizer::generateParallelizedFunctionBody(const FunctionI
         }
         processedSourceCode.insert(loop.source_code);
         
-        // Find the loop in the body
+        // Find the loop in the body - be more flexible since thread-safe replacements may have modified the exact source
+        // Try exact match first, then fall back to pattern matching
         size_t loopPos = parallelizedBody.find(loop.source_code);
+        if (loopPos == std::string::npos && !loop.loop_variable.empty()) {
+            // Try to find by loop variable pattern: "for (type var = ..."
+            std::string loopPattern = "for (" + loop.loop_variable;
+            loopPos = parallelizedBody.find(loopPattern);
+            if (loopPos == std::string::npos) {
+                // Try more general pattern: "for (int " + loop_variable
+                loopPattern = "for (int " + loop.loop_variable;
+                loopPos = parallelizedBody.find(loopPattern);
+            }
+        }
         if (loopPos == std::string::npos) {
             continue;
         }
@@ -263,7 +308,8 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
     mpiCode << "#include <stdio.h>\n";
     mpiCode << "#include <iostream>\n";
     mpiCode << "#include <vector>\n";
-    mpiCode << "#include <cmath>\n\n";
+    mpiCode << "#include <cmath>\n";
+    mpiCode << "#include <time.h>\n\n";
     
     // Add global variables if any functions use them
     bool hasGlobalReads = false;

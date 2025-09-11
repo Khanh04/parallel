@@ -175,6 +175,7 @@ bool MainFunctionExtractor::isUserFunction(const std::string& funcName) {
            funcName != "sleep" && funcName.find("std::") == std::string::npos &&
            funcName.find("cout") == std::string::npos &&
            funcName.find("endl") == std::string::npos &&
+           funcName.find("operator") == std::string::npos &&
            funcName.find("__") != 0;
 }
 

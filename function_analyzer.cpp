@@ -60,6 +60,12 @@ bool ComprehensiveFunctionAnalyzer::VisitFunctionDecl(FunctionDecl *FD) {
     if (FD->hasBody()) {
         std::string funcName = FD->getNameAsString();
         
+        // Skip functions from system headers - only analyze user code
+        SourceLocation loc = FD->getBeginLoc();
+        if (SM->isInSystemHeader(loc)) {
+            return true;
+        }
+        
         // Skip if we've already processed this function
         if (functionInfo.count(funcName)) {
             return true;
@@ -171,6 +177,40 @@ std::string ComprehensiveFunctionAnalyzer::generateParallelizedFunction(const st
     }
     
     std::string parallelizedBody = info.original_body;
+    
+    // First, replace thread-unsafe function calls with thread-safe alternatives
+    for (const auto& loop : info.loops) {
+        if (loop.has_thread_unsafe_calls) {
+            for (const auto& unsafeFunc : loop.unsafe_functions) {
+                if (unsafeFunc == "rand") {
+                    // Replace rand() with rand_r(&__thread_seed)
+                    size_t pos = 0;
+                    while ((pos = parallelizedBody.find("rand()", pos)) != std::string::npos) {
+                        parallelizedBody.replace(pos, 6, "rand_r(&__thread_seed)");
+                        pos += 20; // Length of "rand_r(&__thread_seed)"
+                    }
+                }
+            }
+        }
+    }
+    
+    // Add thread-local variable declarations at the beginning of function
+    bool needsThreadSeed = false;
+    for (const auto& loop : info.loops) {
+        if (loop.thread_local_vars.count("__thread_seed")) {
+            needsThreadSeed = true;
+            break;
+        }
+    }
+    
+    if (needsThreadSeed) {
+        // Insert thread-local seed declaration after opening brace
+        size_t bracePos = parallelizedBody.find('{');
+        if (bracePos != std::string::npos) {
+            std::string seedDecl = "\n    unsigned int __thread_seed = (unsigned int)time(NULL) ^ omp_get_thread_num();";
+            parallelizedBody.insert(bracePos + 1, seedDecl);
+        }
+    }
     
     // Insert OpenMP pragmas before parallelizable loops
     for (const auto& loop : info.loops) {

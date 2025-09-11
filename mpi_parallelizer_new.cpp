@@ -87,7 +87,14 @@ int main(int argc, const char **argv) {
     }
 
     std::vector<std::string> compileCommands = {
-        "clang++", "-fsyntax-only", "-std=c++17"
+        "clang++", "-fsyntax-only", "-std=c++17",
+        "-I/usr/include/c++/11",
+        "-I/usr/include/x86_64-linux-gnu/c++/11",
+        "-I/usr/include/c++/11/backward",
+        "-I/usr/lib/gcc/x86_64-linux-gnu/11/include",
+        "-I/usr/local/include",
+        "-I/usr/include/x86_64-linux-gnu",
+        "-I/usr/include"
     };
     
     auto Compilations = std::make_unique<clang::tooling::FixedCompilationDatabase>(

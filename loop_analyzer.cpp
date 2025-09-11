@@ -15,6 +15,12 @@ bool ComprehensiveLoopAnalyzer::VisitFunctionDecl(FunctionDecl *FD) {
     if (FD->hasBody()) {
         std::string funcName = FD->getNameAsString();
         
+        // Skip functions from system headers - only analyze user code
+        SourceLocation loc = FD->getBeginLoc();
+        if (SM->isInSystemHeader(loc)) {
+            return true;
+        }
+        
         // Skip if we've already processed this function
         if (functionLoops.count(funcName)) {
             return true;
@@ -86,6 +92,9 @@ void ComprehensiveLoopAnalyzer::processForLoop(ForStmt *FS) {
     loop.end_line = SM->getSpellingLineNumber(endLoc);
     loop.start_col = SM->getSpellingColumnNumber(startLoc);
     loop.end_col = SM->getSpellingColumnNumber(endLoc);
+    
+    // Initialize thread-safety fields
+    loop.has_thread_unsafe_calls = false;
     
     // Extract source code
     loop.source_code = getSourceText(FS->getSourceRange());
@@ -253,8 +262,21 @@ void ComprehensiveLoopAnalyzer::analyzeLoopBody(Stmt *body, LoopInfo &loop) {
             if (FunctionDecl *FD = CE->getDirectCallee()) {
                 std::string funcName = FD->getNameAsString();
                 
+                // Check for thread-unsafe functions
+                if (funcName == "rand" || funcName == "srand" ||
+                    funcName == "strtok" || funcName == "asctime" ||
+                    funcName == "ctime" || funcName == "gmtime" ||
+                    funcName == "localtime" || funcName == "strerror") {
+                    loop->has_thread_unsafe_calls = true;
+                    loop->unsafe_functions.push_back(funcName);
+                    
+                    // For rand(), we need a thread-local seed variable
+                    if (funcName == "rand") {
+                        loop->thread_local_vars.insert("__thread_seed");
+                    }
+                }
                 // Check for I/O operations - be more specific
-                if (funcName == "printf" || funcName == "scanf" ||
+                else if (funcName == "printf" || funcName == "scanf" ||
                     funcName == "puts" || funcName == "gets" ||
                     funcName == "fprintf" || funcName == "fscanf" ||
                     funcName == "fread" || funcName == "fwrite") {
@@ -409,6 +431,10 @@ void ComprehensiveLoopAnalyzer::performDependencyAnalysis(LoopInfo &loop, const 
             loop.analysis_notes += "Contains function calls - verify they are thread-safe. ";
         }
         
+        if (loop.has_thread_unsafe_calls && loop.parallelizable) {
+            loop.analysis_notes += "Thread-unsafe functions detected - replacing with thread-safe alternatives. ";
+        }
+        
         if (loop.parallelizable) {
             loop.analysis_notes += "PARALLELIZABLE - OpenMP pragma will be added. ";
             // Choose schedule type
@@ -452,6 +478,18 @@ std::string ComprehensiveLoopAnalyzer::generateOpenMPPragma(const LoopInfo& loop
             }
             pragma << ")";
         }
+    }
+    
+    // Add firstprivate clause for thread-local variables (like thread seeds)
+    if (!loop.thread_local_vars.empty()) {
+        pragma << " firstprivate(";
+        bool first = true;
+        for (const auto& var : loop.thread_local_vars) {
+            if (!first) pragma << ",";
+            pragma << var;
+            first = false;
+        }
+        pragma << ")";
     }
     
     // Note: Loop variables declared in for-loop are automatically private

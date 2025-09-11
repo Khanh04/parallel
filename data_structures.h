@@ -21,6 +21,9 @@ struct LoopInfo {
     bool has_break_continue;             // Contains break/continue statements
     bool has_complex_condition;          // Complex loop condition (&&, ||)
     bool is_nested;                      // Is a nested loop
+    bool has_thread_unsafe_calls;        // Contains thread-unsafe function calls
+    std::vector<std::string> unsafe_functions; // List of thread-unsafe functions found
+    std::set<std::string> thread_local_vars; // Variables that need thread-local storage
     bool parallelizable;                 // Can be parallelized
     std::string schedule_type;           // Recommended schedule
     std::string analysis_notes;          // Analysis details
