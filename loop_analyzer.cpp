@@ -111,15 +111,24 @@ void ComprehensiveLoopAnalyzer::processForLoop(ForStmt *FS) {
         }
     }
     
-    // Check for complex loop condition (&&, ||, etc.)
+    // PHASE 2 FIX: More precise complex condition detection
+    loop.has_complex_condition = false;  // Initialize to false
     if (Expr *Cond = FS->getCond()) {
         std::string conditionText = getSourceText(Cond->getSourceRange());
         // Remove whitespace for better matching
         std::string trimmedCondition = conditionText;
         trimmedCondition.erase(std::remove_if(trimmedCondition.begin(), trimmedCondition.end(), ::isspace), trimmedCondition.end());
         
+        // Only mark as complex if it actually contains logical operators
         if (trimmedCondition.find("&&") != std::string::npos || 
             trimmedCondition.find("||") != std::string::npos) {
+            loop.has_complex_condition = true;
+        }
+        
+        // Additional complex patterns to avoid
+        if (trimmedCondition.find("()") != std::string::npos ||   // Function calls in condition
+            trimmedCondition.find("->") != std::string::npos ||   // Pointer dereference
+            trimmedCondition.find("?") != std::string::npos) {    // Ternary operator
             loop.has_complex_condition = true;
         }
     }
@@ -418,10 +427,14 @@ void ComprehensiveLoopAnalyzer::performDependencyAnalysis(LoopInfo &loop, const 
             loop.analysis_notes += "Has loop-carried dependencies - not parallelizable. ";
         }
         
-        // Complex conditions are blocking - they override any other considerations
-        if (loop.has_complex_condition) {
+        // PHASE 2 FIX: Complex conditions should NOT override reduction parallelization
+        if (loop.has_complex_condition && loop.reduction_vars.empty()) {
+            // Only block if there are no reduction operations to salvage the loop
             loop.parallelizable = false;
-            loop.analysis_notes += "Complex loop condition - not parallelizable. ";
+            loop.analysis_notes += "Complex loop condition with no reduction - not parallelizable. ";
+        } else if (loop.has_complex_condition && !loop.reduction_vars.empty()) {
+            // Complex condition but has reduction - still parallelizable with caution
+            loop.analysis_notes += "Complex loop condition but has reduction operations - parallelizable with reduction clause. ";
         }
         
         if (loop.is_nested && loop.parallelizable) {

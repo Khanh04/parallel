@@ -55,6 +55,26 @@ public:
         assert_true(equal, testName, fullMessage);
     }
     
+    void assert_equals(int expected, int actual, 
+                      const std::string& testName, const std::string& message = "") {
+        bool equal = (expected == actual);
+        std::string fullMessage = message;
+        if (!equal && fullMessage.empty()) {
+            fullMessage = "Expected: " + std::to_string(expected) + ", Got: " + std::to_string(actual);
+        }
+        assert_true(equal, testName, fullMessage);
+    }
+    
+    void assert_equals(size_t expected, size_t actual, 
+                      const std::string& testName, const std::string& message = "") {
+        bool equal = (expected == actual);
+        std::string fullMessage = message;
+        if (!equal && fullMessage.empty()) {
+            fullMessage = "Expected: " + std::to_string(expected) + ", Got: " + std::to_string(actual);
+        }
+        assert_true(equal, testName, fullMessage);
+    }
+    
     void assert_contains(const std::string& text, const std::string& substring, 
                         const std::string& testName, const std::string& message = "") {
         bool contains = (text.find(substring) != std::string::npos);
@@ -73,6 +93,32 @@ public:
             fullMessage = "Text unexpectedly contains: '" + substring + "'";
         }
         assert_true(notContains, testName, fullMessage);
+    }
+    
+    // Overload for strict matching (for cases where we want to ignore certain matches)
+    void assert_not_contains(const std::string& text, const std::string& substring, 
+                            const std::string& testName, bool strict) {
+        // When strict=true, we want to ensure the pattern really doesn't exist
+        bool notContains = (text.find(substring) == std::string::npos);
+        if (strict) {
+            // Additional validation - look for the substring without trailing semicolon
+            size_t pos = text.find(substring);
+            while (pos != std::string::npos) {
+                // Check if this occurrence is followed by a semicolon
+                if (pos + substring.length() < text.length() && text[pos + substring.length()] == ';') {
+                    // This is a complete typedef, skip it
+                    pos = text.find(substring, pos + 1);
+                    continue;
+                } else {
+                    // Found incomplete typedef
+                    notContains = false;
+                    break;
+                }
+            }
+        }
+        std::string message = strict ? "Text contains incomplete pattern: '" + substring + "'" 
+                                    : "Text unexpectedly contains: '" + substring + "'";
+        assert_true(notContains, testName, message);
     }
     
     // Run a test function
@@ -121,11 +167,20 @@ std::string create_temp_cpp_file(const std::string& content, const std::string& 
 
 // Helper function to run MPI parallelizer on a test file
 std::string run_parallelizer_on_file(const std::string& filepath) {
-    std::string command = "cd /home/khanh/parallel && ./build/mpi-parallelizer " + filepath + " 2>/dev/null";
-    system(command.c_str());
+    // FIXED: Use the current Phase 2 version (not build/ version)
+    std::string command = "cd /home/khanh/parallel && ./mpi-parallelizer " + filepath + " > /dev/null 2>&1";
+    int result = system(command.c_str());
+    
+    if (result != 0) {
+        return "ERROR: Failed to run mpi-parallelizer on " + filepath;
+    }
     
     // Read the generated output
     std::ifstream outputFile("/home/khanh/parallel/enhanced_hybrid_mpi_openmp_output.cpp");
+    if (!outputFile.is_open()) {
+        return "ERROR: Could not open output file enhanced_hybrid_mpi_openmp_output.cpp";
+    }
+    
     std::stringstream buffer;
     buffer << outputFile.rdbuf();
     outputFile.close();

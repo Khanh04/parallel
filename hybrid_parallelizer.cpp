@@ -228,6 +228,39 @@ std::string HybridParallelizer::extractFunctionCall(const std::string& originalC
     return result;
 }
 
+std::string HybridParallelizer::extractIncludesOnly(const std::string& source) {
+    std::stringstream result;
+    std::istringstream sourceStream(source);
+    std::string line;
+    
+    while (std::getline(sourceStream, line)) {
+        // Trim whitespace
+        size_t start = line.find_first_not_of(" \t");
+        if (start != std::string::npos) {
+            std::string trimmed = line.substr(start);
+            
+            // Include #include, #define, #pragma, typedef, using statements, and empty lines
+            if (trimmed.substr(0, 8) == "#include" || 
+                trimmed.substr(0, 7) == "#define" ||
+                trimmed.substr(0, 7) == "#pragma" ||
+                trimmed.substr(0, 7) == "typedef" ||
+                trimmed.substr(0, 5) == "using" ||
+                trimmed.substr(0, 2) == "//" ||
+                trimmed.empty()) {
+                result << line << "\n";
+            } else {
+                // Stop at first function definition or other code
+                break;
+            }
+        } else {
+            // Empty line, keep it
+            result << line << "\n";
+        }
+    }
+    
+    return result.str();
+}
+
 std::string HybridParallelizer::generateParallelizedFunctionBody(const FunctionInfo& info) {
     std::string parallelizedBody = info.original_body;
     
@@ -355,8 +388,10 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
     mpiCode << "#include <mpi.h>\n";
     mpiCode << "#include <omp.h>\n";
     if (!originalIncludes.empty()) {
-        mpiCode << originalIncludes;
-        if (originalIncludes.back() != '\n') {
+        // PHASE 2 FIX: Extract only #include statements, skip function definitions
+        std::string cleanedIncludes = extractIncludesOnly(originalIncludes);
+        mpiCode << cleanedIncludes;
+        if (!cleanedIncludes.empty() && cleanedIncludes.back() != '\n') {
             mpiCode << "\n";
         }
     } else {
@@ -368,7 +403,12 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
     if (!sourceContext.typedefs.empty()) {
         mpiCode << "\n// Type definitions from original source\n";
         for (const auto& typedefInfo : sourceContext.typedefs) {
-            mpiCode << typedefInfo.definition << "\n";
+            std::string typedef_def = typedefInfo.definition;
+            // PHASE 2 FIX: Ensure typedef ends with semicolon
+            if (!typedef_def.empty() && typedef_def.back() != ';') {
+                typedef_def += ";";
+            }
+            mpiCode << typedef_def << "\n";
         }
     }
     
@@ -433,34 +473,57 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
         }
     }
     
-    // Generate code for all functions
+    // PHASE 2 FIX: Generate enhanced functions (not duplicates) using complete source  
     for (const std::string& funcName : outputFunctions) {
         if (functionInfo.count(funcName)) {
             const FunctionInfo& info = functionInfo.at(funcName);
             
-            mpiCode << "// Parallelized function: " << info.name << "\n";
-            if (enableLoopParallelization && info.has_parallelizable_loops) {
-                mpiCode << "// Contains parallelizable loops - OpenMP pragmas added\n";
-            } else if (info.has_parallelizable_loops) {
-                mpiCode << "// Contains loops (OpenMP disabled by --no-loops flag)\n";
-            }
-            
-            // Function signature
-            mpiCode << info.return_type << " " << info.name << "(";
-            for (size_t i = 0; i < info.parameter_types.size(); i++) {
-                if (i > 0) mpiCode << ", ";
-                mpiCode << info.parameter_types[i];
-                if (i < info.parameter_names.size() && !info.parameter_names[i].empty()) {
-                    mpiCode << " " << info.parameter_names[i];
+            // PHASE 2: Use complete function source if available, otherwise build from parts
+            if (!info.complete_function_source.empty()) {
+                // Enhanced version with loop parallelization if enabled
+                if (enableLoopParallelization && info.has_parallelizable_loops) {
+                    mpiCode << "// Enhanced function with OpenMP pragmas: " << info.name << "\n";
+                    
+                    // Extract function signature and generate body with pragmas
+                    if (!info.function_signature.empty()) {
+                        mpiCode << info.function_signature << " ";
+                        mpiCode << generateParallelizedFunctionBody(info);
+                    } else {
+                        // Fallback: use complete source but mark as enhanced
+                        mpiCode << "// Original function (pragma enhancement failed): " << info.name << "\n";
+                        mpiCode << info.complete_function_source;
+                    }
+                } else {
+                    // Use original complete source
+                    mpiCode << "// Original function: " << info.name << "\n";
+                    mpiCode << info.complete_function_source;
                 }
-            }
-            mpiCode << ") ";
-            
-            // Function body with OpenMP pragmas
-            if (enableLoopParallelization && info.has_parallelizable_loops) {
-                mpiCode << generateParallelizedFunctionBody(info);
             } else {
-                mpiCode << info.original_body;
+                // Fallback: build function from parts (legacy mode)
+                mpiCode << "// Reconstructed function: " << info.name << "\n";
+                if (enableLoopParallelization && info.has_parallelizable_loops) {
+                    mpiCode << "// Contains parallelizable loops - OpenMP pragmas added\n";
+                } else if (info.has_parallelizable_loops) {
+                    mpiCode << "// Contains loops (OpenMP disabled by --no-loops flag)\n";
+                }
+                
+                // Function signature
+                mpiCode << info.return_type << " " << info.name << "(";
+                for (size_t i = 0; i < info.parameter_types.size(); i++) {
+                    if (i > 0) mpiCode << ", ";
+                    mpiCode << info.parameter_types[i];
+                    if (i < info.parameter_names.size() && !info.parameter_names[i].empty()) {
+                        mpiCode << " " << info.parameter_names[i];
+                    }
+                }
+                mpiCode << ") ";
+                
+                // Function body with OpenMP pragmas
+                if (enableLoopParallelization && info.has_parallelizable_loops) {
+                    mpiCode << generateParallelizedFunctionBody(info);
+                } else {
+                    mpiCode << info.original_body;
+                }
             }
             mpiCode << "\n\n";
         } else {

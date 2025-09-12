@@ -27,6 +27,7 @@ private:
     std::string generateParallelizedFunctionBody(const FunctionInfo& info);
     std::string resolveVariableNameConflict(const std::string& originalName) const;
     std::string substituteVariableNames(const std::string& originalCall, const std::map<std::string, std::string>& variableNameMap) const;
+    std::string extractIncludesOnly(const std::string& source);  // PHASE 2: Extract only include statements
     
 public:
     HybridParallelizer(const std::vector<FunctionCall>& calls, 
