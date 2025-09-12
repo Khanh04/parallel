@@ -10,6 +10,22 @@
 #include "clang/AST/ASTConsumer.h"
 #include "clang/Frontend/FrontendActions.h"
 #include "clang/Frontend/CompilerInstance.h"
+#include "clang/AST/RecursiveASTVisitor.h"
+
+// NEW: Typedef collector for extracting type definitions
+class TypedefCollector : public clang::RecursiveASTVisitor<TypedefCollector> {
+public:
+    SourceCodeContext sourceContext;
+    clang::SourceManager *SM;
+    
+    TypedefCollector(clang::SourceManager *sourceManager) : SM(sourceManager) {}
+    
+    bool VisitTypedefDecl(clang::TypedefDecl *TD);
+    bool VisitTypeAliasDecl(clang::TypeAliasDecl *TAD);  // For 'using' aliases
+    
+private:
+    std::string getSourceText(clang::SourceRange range);
+};
 
 class HybridParallelizerConsumer : public clang::ASTConsumer {
 private:
@@ -18,6 +34,7 @@ private:
     ComprehensiveFunctionAnalyzer functionAnalyzer;
     MainFunctionExtractor mainExtractor;
     ComprehensiveLoopAnalyzer loopAnalyzer;
+    TypedefCollector typedefCollector;  // NEW: Typedef collector
     
 public:
     HybridParallelizerConsumer(clang::CompilerInstance &CI);

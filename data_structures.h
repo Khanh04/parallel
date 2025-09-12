@@ -41,6 +41,8 @@ struct FunctionInfo {
     std::vector<std::string> parameter_names;
     std::string original_body;
     std::string parallelized_body;
+    std::string complete_function_source;   // NEW: Complete function source code including signature
+    std::string function_signature;         // NEW: Just the function signature
     std::vector<LoopInfo> loops;
     std::set<std::string> global_reads;
     std::set<std::string> global_writes;
@@ -66,6 +68,8 @@ struct LocalVariable {
     std::string name;
     std::string type;
     std::string initializationValue;  // Store the original initialization expression
+    std::string completeDeclaration;  // NEW: Complete variable declaration from source
+    bool hasComplexInitialization;    // NEW: Flag for complex C++11 initializations
     int declarationOrder;  // Order in which variable was declared in source
     int definedAtCall;
     std::set<int> usedInCalls;
@@ -90,6 +94,23 @@ struct DependencyNode {
     std::set<int> dependencies;
     std::set<int> dependents;
     std::string dependencyReason;
+};
+
+// NEW: Structure to hold typedef information
+struct TypedefInfo {
+    std::string name;           // Name of the typedef
+    std::string definition;     // Complete typedef definition
+    std::string underlyingType; // The underlying type
+    unsigned line;              // Line number in source
+};
+
+// NEW: Structure to hold complete source code context
+struct SourceCodeContext {
+    std::vector<std::string> includes;          // All #include statements
+    std::vector<TypedefInfo> typedefs;          // All typedef statements
+    std::vector<std::string> globalDeclarations; // Global variable declarations
+    std::string namespaceDeclarations;          // using namespace statements
+    std::vector<std::string> forwardDeclarations; // Forward declarations
 };
 
 #endif // DATA_STRUCTURES_H

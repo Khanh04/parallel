@@ -55,46 +55,61 @@ void MainFunctionExtractor::collectLocalVariablesInStmt(Stmt *stmt) {
                 localVar.definedAtCall = -1;
                 localVar.isParameter = false;
                 
-                // Extract initialization value if present
+                // NEW: Enhanced initialization extraction
+                localVar.completeDeclaration = getSourceText(VD->getSourceRange());
+                localVar.hasComplexInitialization = false;
+                
                 if (VD->hasInit()) {
-                    // Check if this is an explicit initialization in the source
-                    SourceRange varRange = VD->getSourceRange();
-                    SourceRange initRange = VD->getInit()->getSourceRange();
+                    std::string varDeclText = localVar.completeDeclaration;
                     
-                    // Get the source text for the entire variable declaration
-                    std::string varDeclText = getSourceText(varRange);
+                    // Detect complex C++11 initializations
+                    bool hasCurlyBraces = varDeclText.find('{') != std::string::npos && 
+                                         varDeclText.find('}') != std::string::npos;
+                    bool hasAssignment = varDeclText.find('=') != std::string::npos;
+                    bool hasConstructorCall = varDeclText.find('(') != std::string::npos && 
+                                            varDeclText.find(')') != std::string::npos;
                     
-                    // Check if the declaration contains '=' (assignment) or explicit constructor args
-                    if (varDeclText.find('=') != std::string::npos) {
-                        // This is assignment initialization: "Type var = value"
-                        size_t eqPos = varDeclText.find('=');
-                        std::string initPart = varDeclText.substr(eqPos + 1);
-                        // Remove trailing semicolon and whitespace
-                        while (!initPart.empty() && (initPart.back() == ';' || isspace(initPart.back()))) {
-                            initPart.pop_back();
-                        }
-                        // Remove leading whitespace
-                        size_t start = initPart.find_first_not_of(" \t");
-                        if (start != std::string::npos) {
-                            initPart = initPart.substr(start);
-                        }
-                        localVar.initializationValue = initPart;
-                    } else if (varDeclText.find('(') != std::string::npos && varDeclText.find(')') != std::string::npos) {
-                        // This is constructor initialization: "Type var(args)"
-                        size_t parenStart = varDeclText.find('(');
-                        size_t parenEnd = varDeclText.rfind(')');
-                        if (parenStart != std::string::npos && parenEnd != std::string::npos && parenEnd > parenStart) {
-                            std::string constructorArgs = varDeclText.substr(parenStart, parenEnd - parenStart + 1);
-                            localVar.initializationValue = localVar.name + constructorArgs;
+                    if (hasCurlyBraces) {
+                        // C++11 initializer list: vector<string> v = {"a", "b", "c"}
+                        // or                    : vector<string> v{"a", "b", "c"}
+                        localVar.hasComplexInitialization = true;
+                        if (hasAssignment) {
+                            size_t eqPos = varDeclText.find('=');
+                            localVar.initializationValue = varDeclText.substr(eqPos + 1);
                         } else {
-                            localVar.initializationValue = ""; // Default constructor
+                            // Direct list initialization: Type var{args}
+                            size_t braceStart = varDeclText.find('{');
+                            localVar.initializationValue = varDeclText.substr(braceStart);
                         }
+                    } else if (hasAssignment) {
+                        // Regular assignment: Type var = value
+                        size_t eqPos = varDeclText.find('=');
+                        localVar.initializationValue = varDeclText.substr(eqPos + 1);
+                    } else if (hasConstructorCall) {
+                        // Constructor initialization: Type var(args)
+                        size_t parenStart = varDeclText.find('(');
+                        localVar.initializationValue = varDeclText.substr(parenStart);
                     } else {
-                        // Default constructor or implicit initialization
-                        localVar.initializationValue = ""; // No explicit initialization
+                        localVar.initializationValue = "";
+                    }
+                    
+                    // Clean up initialization value
+                    if (!localVar.initializationValue.empty()) {
+                        // Remove leading/trailing whitespace and semicolon
+                        size_t start = localVar.initializationValue.find_first_not_of(" \t\n");
+                        if (start != std::string::npos) {
+                            localVar.initializationValue = localVar.initializationValue.substr(start);
+                        }
+                        while (!localVar.initializationValue.empty() && 
+                               (localVar.initializationValue.back() == ';' || 
+                                localVar.initializationValue.back() == ' ' ||
+                                localVar.initializationValue.back() == '\t' ||
+                                localVar.initializationValue.back() == '\n')) {
+                            localVar.initializationValue.pop_back();
+                        }
                     }
                 } else {
-                    localVar.initializationValue = ""; // No initialization
+                    localVar.initializationValue = "";
                 }
                 
                 localVariables[localVar.name] = localVar;

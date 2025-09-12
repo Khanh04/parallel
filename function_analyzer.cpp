@@ -113,12 +113,32 @@ bool ComprehensiveFunctionAnalyzer::VisitFunctionDecl(FunctionDecl *FD) {
             functionAnalysis[currentFunction].parameterTypes.push_back(paramType);
         }
         
-        // Get source location
+        // Get source location and complete function source
         if (SM) {
             SourceLocation startLoc = FD->getBeginLoc();
             SourceLocation endLoc = FD->getEndLoc();
             info.start_line = SM->getSpellingLineNumber(startLoc);
             info.end_line = SM->getSpellingLineNumber(endLoc);
+            
+            // NEW: Get complete function source code (signature + body)
+            SourceRange completeRange = FD->getSourceRange();
+            info.complete_function_source = getSourceText(completeRange);
+            
+            // NEW: Extract function signature separately
+            if (CompoundStmt *body = dyn_cast<CompoundStmt>(FD->getBody())) {
+                SourceLocation bodyStart = body->getBeginLoc();
+                SourceRange signatureRange(startLoc, bodyStart.getLocWithOffset(-1));
+                info.function_signature = getSourceText(signatureRange);
+                
+                // Clean up signature (remove trailing whitespace and opening brace)
+                while (!info.function_signature.empty() && 
+                       (info.function_signature.back() == ' ' || 
+                        info.function_signature.back() == '\t' || 
+                        info.function_signature.back() == '\n' ||
+                        info.function_signature.back() == '{')) {
+                    info.function_signature.pop_back();
+                }
+            }
             
             // Get function body source
             if (CompoundStmt *body = dyn_cast<CompoundStmt>(FD->getBody())) {

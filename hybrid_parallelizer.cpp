@@ -11,11 +11,13 @@ HybridParallelizer::HybridParallelizer(const std::vector<FunctionCall>& calls,
                                      const std::vector<LoopInfo>& loops,
                                      const std::set<std::string>& globals,
                                      const std::string& includes,
-                                     bool enableLoops)
+                                     bool enableLoops,
+                                     const SourceCodeContext& context)
     : functionCalls(calls), functionAnalysis(analysis), 
       localVariables(localVars), functionInfo(funcInfo),
       mainLoops(loops), globalVariables(globals),
-      originalIncludes(includes), enableLoopParallelization(enableLoops) {
+      originalIncludes(includes), enableLoopParallelization(enableLoops),
+      sourceContext(context) {  // NEW: Store source context
     buildDependencyGraph();
 }
 
@@ -360,6 +362,18 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
     } else {
         // Fallback headers if no original includes provided
         mpiCode << "#include <stdio.h>\n";
+    }
+    
+    // NEW: Add typedefs from source context
+    if (!sourceContext.typedefs.empty()) {
+        mpiCode << "\n// Type definitions from original source\n";
+        for (const auto& typedefInfo : sourceContext.typedefs) {
+            mpiCode << typedefInfo.definition << "\n";
+        }
+    }
+    
+    // Fallback headers if no original includes provided (continued)
+    if (originalIncludes.empty()) {
         mpiCode << "#include <iostream>\n";
         mpiCode << "#include <vector>\n";
         mpiCode << "#include <cmath>\n";

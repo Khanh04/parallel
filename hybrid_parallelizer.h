@@ -17,6 +17,7 @@ private:
     std::set<std::string> globalVariables;
     bool enableLoopParallelization;
     std::string originalIncludes;
+    SourceCodeContext sourceContext;  // NEW: Complete source context including typedefs
     
     std::string normalizeType(const std::string& cppType);
     std::string getMPIDatatype(const std::string& cppType);
@@ -35,7 +36,8 @@ public:
                       const std::vector<LoopInfo>& loops,
                       const std::set<std::string>& globals,
                       const std::string& includes = "",
-                      bool enableLoops = true);
+                      bool enableLoops = true,
+                      const SourceCodeContext& context = SourceCodeContext());  // NEW: Add source context
     
     void buildDependencyGraph();
     std::vector<std::vector<int>> getParallelizableGroups() const;

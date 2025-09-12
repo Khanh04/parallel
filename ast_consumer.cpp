@@ -15,13 +15,17 @@ using namespace clang;
 HybridParallelizerConsumer::HybridParallelizerConsumer(CompilerInstance &CI) 
     : CI(CI), functionAnalyzer(globalCollector.globalVariables),
       mainExtractor(&CI.getSourceManager()),
-      loopAnalyzer(&CI.getSourceManager(), globalCollector.globalVariables) {}
+      loopAnalyzer(&CI.getSourceManager(), globalCollector.globalVariables),
+      typedefCollector(&CI.getSourceManager()) {}  // NEW: Initialize typedef collector
 
 void HybridParallelizerConsumer::HandleTranslationUnit(ASTContext &Context) {
     TranslationUnitDecl *TU = Context.getTranslationUnitDecl();
     
     // First pass: collect global variables
     globalCollector.TraverseDecl(TU);
+    
+    // NEW: First pass: collect typedefs and type aliases
+    typedefCollector.TraverseDecl(TU);
     
     // Update analyzers with global variables
     functionAnalyzer.globalVars = globalCollector.globalVariables;
@@ -51,7 +55,8 @@ void HybridParallelizerConsumer::HandleTranslationUnit(ASTContext &Context) {
                                    mainExtractor.getMainLoops(),
                                    globalCollector.globalVariables,
                                    originalIncludes,
-                                   enableLoopParallelization);
+                                   enableLoopParallelization,
+                                   typedefCollector.sourceContext);  // NEW: Pass typedef information
     
     // Generate output
     std::string hybridCode = parallelizer.generateHybridMPIOpenMPCode();
@@ -502,6 +507,50 @@ std::string HybridParallelizerConsumer::extractOriginalIncludes(ASTContext &Cont
     }
     
     return includes.str();
+}
+
+// NEW: TypedefCollector implementation
+std::string TypedefCollector::getSourceText(SourceRange range) {
+    if (range.isInvalid() || !SM) {
+        return "";
+    }
+    
+    bool invalid = false;
+    StringRef text = Lexer::getSourceText(CharSourceRange::getTokenRange(range), 
+                                         *SM, LangOptions(), &invalid);
+    if (invalid) {
+        return "";
+    }
+    
+    return text.str();
+}
+
+bool TypedefCollector::VisitTypedefDecl(TypedefDecl *TD) {
+    // Only collect typedefs from the main file (not system headers)
+    if (SM && !SM->isInSystemHeader(TD->getLocation()) && SM->isInMainFile(TD->getLocation())) {
+        TypedefInfo typedefInfo;
+        typedefInfo.name = TD->getNameAsString();
+        typedefInfo.definition = getSourceText(TD->getSourceRange());
+        typedefInfo.underlyingType = TD->getUnderlyingType().getAsString();
+        typedefInfo.line = SM->getSpellingLineNumber(TD->getLocation());
+        
+        sourceContext.typedefs.push_back(typedefInfo);
+    }
+    return true;
+}
+
+bool TypedefCollector::VisitTypeAliasDecl(TypeAliasDecl *TAD) {
+    // Handle C++11 'using' type aliases
+    if (SM && !SM->isInSystemHeader(TAD->getLocation()) && SM->isInMainFile(TAD->getLocation())) {
+        TypedefInfo typedefInfo;
+        typedefInfo.name = TAD->getNameAsString();
+        typedefInfo.definition = getSourceText(TAD->getSourceRange());
+        typedefInfo.underlyingType = TAD->getUnderlyingType().getAsString();
+        typedefInfo.line = SM->getSpellingLineNumber(TAD->getLocation());
+        
+        sourceContext.typedefs.push_back(typedefInfo);
+    }
+    return true;
 }
 
 std::unique_ptr<ASTConsumer> HybridParallelizerAction::CreateASTConsumer(CompilerInstance &CI,
