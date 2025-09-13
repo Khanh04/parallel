@@ -1,4 +1,5 @@
 #include "hybrid_parallelizer.h"
+#include "type_mapping.h"
 #include <algorithm>
 #include <sstream>
 #include <fstream>
@@ -21,60 +22,10 @@ HybridParallelizer::HybridParallelizer(const std::vector<FunctionCall>& calls,
     buildDependencyGraph();
 }
 
-std::string HybridParallelizer::normalizeType(const std::string& cppType) {
-    if (cppType == "_Bool") return "bool";
-    return cppType;
-}
-
-std::string HybridParallelizer::getMPIDatatype(const std::string& cppType) {
-    std::string normalizedType = normalizeType(cppType);
-    if (normalizedType == "int") return "MPI_INT";
-    if (normalizedType == "double") return "MPI_DOUBLE";
-    if (normalizedType == "float") return "MPI_FLOAT";
-    if (normalizedType == "bool") return "MPI_C_BOOL";
-    if (normalizedType == "char") return "MPI_CHAR";
-    if (normalizedType == "long") return "MPI_LONG";
-    if (normalizedType == "unsigned int") return "MPI_UNSIGNED";
-    if (normalizedType == "long long") return "MPI_LONG_LONG";
-    
-    // Check for unsupported complex types
-    if (normalizedType.find("std::chrono") != std::string::npos ||
-        normalizedType.find("__enable_if_is_duration") != std::string::npos ||
-        normalizedType.find("std::") != std::string::npos ||
-        normalizedType.find("::") != std::string::npos) {
-        return ""; // Return empty string to indicate unsupported type
-    }
-    
-    return "MPI_INT"; // Only for simple unrecognized types
-}
-
-std::string HybridParallelizer::getDefaultValue(const std::string& cppType) {
-    std::string normalizedType = normalizeType(cppType);
-    if (normalizedType == "int") return "0";
-    if (normalizedType == "double") return "0.0";
-    if (normalizedType == "float") return "0.0f";
-    if (normalizedType == "bool") return "false";
-    if (normalizedType == "char") return "'\\0'";
-    if (normalizedType == "long") return "0L";
-    if (normalizedType == "unsigned int") return "0U";
-    if (normalizedType == "long long") return "0LL";
-    
-    // Handle complex types that can't be initialized with simple values
-    if (normalizedType.find("std::chrono") != std::string::npos) {
-        return "std::chrono::system_clock::time_point{}";
-    }
-    if (normalizedType.find("std::string") != std::string::npos) {
-        return "\"\"";
-    }
-    if (normalizedType.find("std::") != std::string::npos) {
-        return normalizedType + "{}"; // Default construction for STL types
-    }
-    
-    return "0";
-}
+// Type mapping functions moved to TypeMapper utility class
 
 bool HybridParallelizer::isTypePrintable(const std::string& cppType) {
-    std::string normalizedType = normalizeType(cppType);
+    std::string normalizedType = TypeMapper::normalizeType(cppType);
     
     // Basic types that are printable
     if (normalizedType == "int" || normalizedType == "double" || normalizedType == "float" ||
@@ -529,14 +480,14 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
         } else {
             std::string returnType = "int";
             if (functionAnalysis.count(funcName)) {
-                returnType = normalizeType(functionAnalysis.at(funcName).returnType);
+                returnType = TypeMapper::normalizeType(functionAnalysis.at(funcName).returnType);
             }
             
             mpiCode << "// Function definition not found for: " << funcName << "\n";
             mpiCode << returnType << " " << funcName << "() {\n";
             mpiCode << "    printf(\"Executing " << funcName << "\\n\");\n";
             if (returnType != "void") {
-                mpiCode << "    return " << getDefaultValue(returnType) << ";\n";
+                mpiCode << "    return " << TypeMapper::getDefaultValue(returnType) << ";\n";
             }
             mpiCode << "}\n\n";
         }
@@ -634,8 +585,8 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
     // Generate result variables
     for (int i = 0; i < functionCalls.size(); ++i) {
         if (functionCalls[i].hasReturnValue) {
-            std::string returnType = normalizeType(functionCalls[i].returnType);
-            std::string defaultValue = getDefaultValue(returnType);
+            std::string returnType = TypeMapper::normalizeType(functionCalls[i].returnType);
+            std::string defaultValue = TypeMapper::getDefaultValue(returnType);
             mpiCode << "    " << returnType << " result_" << i << " = " << defaultValue << ";\n";
         }
     }
@@ -694,7 +645,7 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
                     
                     // Send result to rank 0 if this process is not rank 0
                     mpiCode << "        if (assigned_rank_" << callIdx << " != 0) {\n";
-                    std::string mpiType = getMPIDatatype(functionCalls[callIdx].returnType);
+                    std::string mpiType = TypeMapper::getMPIDatatype(functionCalls[callIdx].returnType);
                     if (!mpiType.empty()) {
                         mpiCode << "            MPI_Send(&result_" << callIdx 
                                << ", 1, " << mpiType << ", 0, " << callIdx << ", MPI_COMM_WORLD);\n";
@@ -718,7 +669,7 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
             for (int i = 0; i < group.size(); ++i) {
                 int callIdx = group[i];
                 if (functionCalls[callIdx].hasReturnValue) {
-                    std::string mpiType = getMPIDatatype(functionCalls[callIdx].returnType);
+                    std::string mpiType = TypeMapper::getMPIDatatype(functionCalls[callIdx].returnType);
                     if (!mpiType.empty()) {
                         // Only receive if function is assigned to a different rank
                         mpiCode << "        if (assigned_rank_" << callIdx << " != 0) {\n";
@@ -764,7 +715,7 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
             }
             
             if (localVariables.count(originalVarName)) {
-                std::string mpiType = getMPIDatatype(localVariables.at(originalVarName).type);
+                std::string mpiType = TypeMapper::getMPIDatatype(localVariables.at(originalVarName).type);
                 if (!mpiType.empty()) {
                     mpiCode << "    MPI_Bcast(&" << varName << ", 1, " << mpiType << ", 0, MPI_COMM_WORLD);\n";
                 } else {

@@ -20,6 +20,7 @@ add_executable(mpi-parallelizer
     main_extractor.cpp
     hybrid_parallelizer.cpp
     ast_consumer.cpp
+    type_mapping.cpp
 )
 
 # Original monolithic version removed - using modular architecture only

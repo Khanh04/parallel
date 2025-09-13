@@ -30,6 +30,7 @@ private:
 class HybridParallelizerConsumer : public clang::ASTConsumer {
 private:
     clang::CompilerInstance &CI;
+    std::string inputFileName;  // Store input filename for output naming
     GlobalVariableCollector globalCollector;
     ComprehensiveFunctionAnalyzer functionAnalyzer;
     MainFunctionExtractor mainExtractor;
@@ -37,7 +38,7 @@ private:
     TypedefCollector typedefCollector;  // NEW: Typedef collector
     
 public:
-    HybridParallelizerConsumer(clang::CompilerInstance &CI);
+    HybridParallelizerConsumer(clang::CompilerInstance &CI, const std::string &inputFile);
     
     void HandleTranslationUnit(clang::ASTContext &Context) override;
     
@@ -46,6 +47,7 @@ private:
     void generateDependencyGraphVisualization(const HybridParallelizer& parallelizer);
     void generateGraphvizDependencyGraph(const HybridParallelizer& parallelizer);
     std::string extractOriginalIncludes(clang::ASTContext &Context);
+    std::string generateOutputFileName() const;  // Generate output filename from input
 };
 
 class HybridParallelizerAction : public clang::ASTFrontendAction {

@@ -2,6 +2,7 @@
 #define HYBRID_PARALLELIZER_H
 
 #include "data_structures.h"
+#include "type_mapping.h"
 #include <map>
 #include <string>
 #include <vector>
@@ -19,9 +20,7 @@ private:
     std::string originalIncludes;
     SourceCodeContext sourceContext;  // NEW: Complete source context including typedefs
     
-    std::string normalizeType(const std::string& cppType);
-    std::string getMPIDatatype(const std::string& cppType);
-    std::string getDefaultValue(const std::string& cppType);
+    // Type mapping functions moved to TypeMapper utility class
     bool isTypePrintable(const std::string& cppType);
     std::string extractFunctionCall(const std::string& originalCall);
     std::string generateParallelizedFunctionBody(const FunctionInfo& info);

@@ -12,8 +12,8 @@ extern bool enableLoopParallelization;
 
 using namespace clang;
 
-HybridParallelizerConsumer::HybridParallelizerConsumer(CompilerInstance &CI) 
-    : CI(CI), functionAnalyzer(globalCollector.globalVariables),
+HybridParallelizerConsumer::HybridParallelizerConsumer(CompilerInstance &CI, const std::string &inputFile) 
+    : CI(CI), inputFileName(inputFile), functionAnalyzer(globalCollector.globalVariables),
       mainExtractor(&CI.getSourceManager()),
       loopAnalyzer(&CI.getSourceManager(), globalCollector.globalVariables),
       typedefCollector(&CI.getSourceManager()) {}  // NEW: Initialize typedef collector
@@ -62,13 +62,14 @@ void HybridParallelizerConsumer::HandleTranslationUnit(ASTContext &Context) {
     std::string hybridCode = parallelizer.generateHybridMPIOpenMPCode();
     
     // Write to output file
-    std::ofstream outFile("enhanced_hybrid_mpi_openmp_output.cpp");
+    std::string outputFileName = generateOutputFileName();
+    std::ofstream outFile(outputFileName);
     if (outFile.is_open()) {
         outFile << hybridCode;
         outFile.close();
-        llvm::outs() << "Enhanced Hybrid MPI/OpenMP parallelized code generated: enhanced_hybrid_mpi_openmp_output.cpp\n";
+        llvm::outs() << "Enhanced Hybrid MPI/OpenMP parallelized code generated: " << outputFileName << "\n";
     } else {
-        llvm::errs() << "Error: Could not create output file\n";
+        llvm::errs() << "Error: Could not create output file: " << outputFileName << "\n";
     }
     
     // Generate dependency graph visualizations
@@ -553,7 +554,27 @@ bool TypedefCollector::VisitTypeAliasDecl(TypeAliasDecl *TAD) {
     return true;
 }
 
+std::string HybridParallelizerConsumer::generateOutputFileName() const {
+    // Extract base filename without extension
+    std::string basename = inputFileName;
+    
+    // Find the last directory separator
+    size_t lastSlash = basename.find_last_of("/\\");
+    if (lastSlash != std::string::npos) {
+        basename = basename.substr(lastSlash + 1);
+    }
+    
+    // Remove the .cpp extension if present
+    size_t lastDot = basename.find_last_of('.');
+    if (lastDot != std::string::npos) {
+        basename = basename.substr(0, lastDot);
+    }
+    
+    // Return the new filename with _parallelized suffix
+    return basename + "_parallelized.cpp";
+}
+
 std::unique_ptr<ASTConsumer> HybridParallelizerAction::CreateASTConsumer(CompilerInstance &CI,
                                                                         llvm::StringRef file) {
-    return std::make_unique<HybridParallelizerConsumer>(CI);
+    return std::make_unique<HybridParallelizerConsumer>(CI, file.str());
 }
