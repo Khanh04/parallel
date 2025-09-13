@@ -125,11 +125,24 @@ void ComprehensiveLoopAnalyzer::processForLoop(ForStmt *FS) {
             loop.has_complex_condition = true;
         }
         
-        // Additional complex patterns to avoid
-        if (trimmedCondition.find("()") != std::string::npos ||   // Function calls in condition
-            trimmedCondition.find("->") != std::string::npos ||   // Pointer dereference
+        // PHASE 3: Smart function call detection - distinguish safe vs unsafe patterns
+        if (trimmedCondition.find("->") != std::string::npos ||   // Pointer dereference
             trimmedCondition.find("?") != std::string::npos) {    // Ternary operator
             loop.has_complex_condition = true;
+        }
+        
+        // PHASE 3: Advanced function call analysis in conditions
+        if (trimmedCondition.find("()") != std::string::npos) {
+            // Check for SAFE STL container patterns
+            bool isSafeSTLPattern = (trimmedCondition.find(".size()") != std::string::npos ||
+                                   trimmedCondition.find(".length()") != std::string::npos ||
+                                   trimmedCondition.find(".empty()") != std::string::npos ||
+                                   trimmedCondition.find(".capacity()") != std::string::npos);
+            
+            // Only mark as complex if it's NOT a safe STL pattern
+            if (!isSafeSTLPattern) {
+                loop.has_complex_condition = true;
+            }
         }
     }
     
@@ -427,14 +440,32 @@ void ComprehensiveLoopAnalyzer::performDependencyAnalysis(LoopInfo &loop, const 
             loop.analysis_notes += "Has loop-carried dependencies - not parallelizable. ";
         }
         
-        // PHASE 2 FIX: Complex conditions should NOT override reduction parallelization
-        if (loop.has_complex_condition && loop.reduction_vars.empty()) {
-            // Only block if there are no reduction operations to salvage the loop
+        // PHASE 3: Enhanced parallelization logic with STL container pattern recognition
+        bool hasSTLContainerPattern = false;
+        
+        // Check for safe STL container element access patterns
+        std::string code = loop.source_code;
+        if (!loop.loop_variable.empty()) {
+            // Pattern: container[i] = f(container[i]) or similar independent element operations
+            std::string loopVar = loop.loop_variable;
+            std::regex elementAccessPattern(R"(\w+\s*\[\s*)" + loopVar + R"(\s*\]\s*=)");
+            if (std::regex_search(code, elementAccessPattern)) {
+                hasSTLContainerPattern = true;
+            }
+        }
+        
+        // PHASE 3: More intelligent parallelization decision
+        if (loop.has_complex_condition && loop.reduction_vars.empty() && !hasSTLContainerPattern) {
+            // Only block if no reduction AND no STL container pattern
             loop.parallelizable = false;
-            loop.analysis_notes += "Complex loop condition with no reduction - not parallelizable. ";
+            loop.analysis_notes += "Complex loop condition with no reduction or STL pattern - not parallelizable. ";
         } else if (loop.has_complex_condition && !loop.reduction_vars.empty()) {
-            // Complex condition but has reduction - still parallelizable with caution
+            // Complex condition but has reduction - still parallelizable
             loop.analysis_notes += "Complex loop condition but has reduction operations - parallelizable with reduction clause. ";
+        } else if (loop.has_complex_condition && hasSTLContainerPattern) {
+            // PHASE 3: STL container pattern detected - parallelizable despite complex condition
+            loop.parallelizable = true;
+            loop.analysis_notes += "STL container element access pattern detected - parallelizable despite complex condition. ";
         }
         
         if (loop.is_nested && loop.parallelizable) {

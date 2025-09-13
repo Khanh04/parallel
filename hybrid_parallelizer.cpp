@@ -592,12 +592,33 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
             // Substitute any variable references within the initialization value
             std::string initValue = substituteVariableNames(localVar.initializationValue, variableNameMap);
             
-            // Handle constructor syntax - detect if it looks like a constructor call
-            if (initValue.find("(") != std::string::npos && initValue.find(resolvedName + "(") == 0) {
-                // This is constructor syntax like "matrix(size, std::vector<double>(size, 1.0))"
-                // Convert to proper constructor call
-                std::string constructorArgs = initValue.substr(resolvedName.length());
-                mpiCode << "    " << localVar.type << " " << resolvedName << constructorArgs << ";\n";
+            // PHASE 3 FIX: Improved constructor vs assignment detection
+            // Check if this is constructor syntax by looking for specific patterns
+            bool isConstructorSyntax = false;
+            
+            // Pattern 1: Starts with parentheses (args) - constructor call  
+            if (initValue.front() == '(' && initValue.back() == ')') {
+                isConstructorSyntax = true;
+            }
+            // Pattern 2: Initializer list {args} - constructor call
+            else if (initValue.front() == '{' && initValue.back() == '}') {
+                isConstructorSyntax = true;
+            }
+            // Pattern 3: Function call without assignment operator
+            else if (initValue.find("(") != std::string::npos && initValue.find("=") == std::string::npos) {
+                // Check if it looks like a function call that should be constructor
+                if (localVar.type.find("std::") != std::string::npos || localVar.type.find("vector") != std::string::npos) {
+                    isConstructorSyntax = true;
+                }
+            }
+            
+            if (isConstructorSyntax) {
+                // Constructor syntax - remove outer parentheses if present
+                std::string constructorArgs = initValue;
+                if (constructorArgs.front() == '(' && constructorArgs.back() == ')') {
+                    constructorArgs = constructorArgs.substr(1, constructorArgs.length() - 2);
+                }
+                mpiCode << "    " << localVar.type << " " << resolvedName << "(" << constructorArgs << ");\n";
             } else {
                 // Regular assignment syntax
                 mpiCode << "    " << localVar.type << " " << resolvedName << " = " << initValue << ";\n";
