@@ -490,21 +490,28 @@ std::string HybridParallelizerConsumer::extractOriginalIncludes(ASTContext &Cont
     std::istringstream stream(FileContent);
     std::string line;
     
-    // Extract all #include lines from the beginning of the file
+    // Extract all #include lines and using statements from the beginning of the file
     while (std::getline(stream, line)) {
         // Trim whitespace
         line.erase(0, line.find_first_not_of(" \t"));
         line.erase(line.find_last_not_of(" \t\r\n") + 1);
-        
+
         if (line.empty()) {
             continue; // Skip empty lines
         } else if (line.find("#include") == 0) {
             includes << line << "\n";
-        } else if (line.find("#") != 0 && !line.empty()) {
-            // If we hit non-preprocessor directive (except comments), stop looking for includes
+        } else if (line.find("using ") == 0) {
+            includes << line << "\n";
+        } else if (line.find("#") == 0) {
+            // Skip other preprocessor directives but continue looking
+            continue;
+        } else if (line.find("//") == 0) {
+            // Skip comments but continue looking
+            continue;
+        } else if (!line.empty()) {
+            // If we hit actual code (non-preprocessor, non-comment), stop looking
             break;
         }
-        // Skip comments and other preprocessor directives but continue looking
     }
     
     return includes.str();

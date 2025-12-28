@@ -9,10 +9,70 @@
 # Compiled executables
 *.exe
 *.out
+*_test
+*_test1
+*_test2
+*_benchmark
+*_parallel
+*_sequential
+*_hybrid
+*_mpi_only
+mpi-parallelizer
+parallel_program
+test_output
+test_*
+benchmark_*
+complex_*
+matrix_*
+minimal_*
+simple_*
+enhanced_*
+corrected_*
+fixed_*
+thread_safe_*
+perf_*
+temp_*
+comparison_*
 
-# Build directories
+# Build directories and CMake artifacts
 build/
 bin/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+CTestTestfile.cmake
+*.cmake
+
+# Test output and log files
+*.log
+*_output.txt
+analysis_output.txt
+debug_output.txt
+full_output.txt
+modular_result.txt
+original_result.txt
+phase*.txt
+
+# Generated/parallelized C++ files
+*_parallelized.cpp
+*_output.cpp
+parallelized_output.cpp
+enhanced_*.cpp
+hybrid_output.cpp
+mpi_only_output.cpp
+
+# Dependency graph visualization files
+dependency_graph.dot
+dependency_graph.png
+dependency_graph_visualization.html
+*.dot
+*.gv
+
+# Office documents
+*.docx
+*.doc
+*.xlsx
 
 # IDE and editor files
 .vscode/
@@ -20,6 +80,9 @@ bin/
 *.sln
 *.xcodeproj
 *.xcworkspace
+*.swp
+*.swo
+*~
 
 # Dependency directories
 vendor/
