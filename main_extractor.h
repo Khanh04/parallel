@@ -19,6 +19,11 @@ public:
     std::vector<LoopInfo> mainLoops; // Loops found in main function
     int variableDeclarationCounter;  // Track declaration order
     
+    // NEW: Track main body source location for offset calculation
+    unsigned mainBodyStartLine;
+    unsigned mainBodyStartColumn;
+    clang::SourceLocation mainBodyStartLoc;
+    
     MainFunctionExtractor(clang::SourceManager *sourceManager);
     
     void setFunctionAnalysis(std::map<std::string, FunctionAnalysis>* analysis);

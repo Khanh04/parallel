@@ -13,12 +13,13 @@ HybridParallelizer::HybridParallelizer(const std::vector<FunctionCall>& calls,
                                      const std::set<std::string>& globals,
                                      const std::string& includes,
                                      bool enableLoops,
-                                     const SourceCodeContext& context)
+                                     const SourceCodeContext& context,
+                                     const std::string& mainBody)
     : functionCalls(calls), functionAnalysis(analysis), 
       localVariables(localVars), functionInfo(funcInfo),
       mainLoops(loops), globalVariables(globals),
       originalIncludes(includes), enableLoopParallelization(enableLoops),
-      sourceContext(context) {  // NEW: Store source context
+      sourceContext(context), mainFunctionBody(mainBody) {  // NEW: Store main body
     buildDependencyGraph();
 }
 
@@ -459,6 +460,201 @@ std::string HybridParallelizer::generateParallelizedFunctionBody(const FunctionI
     return parallelizedBody;
 }
 
+// NEW: Generate main body preserving original structure
+std::string HybridParallelizer::generatePreservedMainBody() {
+    if (mainFunctionBody.empty()) {
+        return ""; // No original body to preserve
+    }
+    
+    std::stringstream result;
+    
+    // Start from the original main body (without the outer braces)
+    std::string body = mainFunctionBody;
+    
+    // Remove outer braces if present
+    size_t firstBrace = body.find('{');
+    size_t lastBrace = body.rfind('}');
+    if (firstBrace != std::string::npos && lastBrace != std::string::npos && lastBrace > firstBrace) {
+        body = body.substr(firstBrace + 1, lastBrace - firstBrace - 1);
+    }
+    
+    // Build set of functions that have internal MPI parallelization (should run on ALL ranks)
+    std::set<std::string> mpiParallelizedFunctions;
+    for (const auto& pair : functionInfo) {
+        if (pair.first != "main") {
+            for (const auto& loop : pair.second.loops) {
+                if (loop.is_mpi_parallelizable) {
+                    mpiParallelizedFunctions.insert(pair.first);
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Build a map from byte offset to function call index for replacement
+    // Sort by offset in reverse order to avoid position shifts during replacement
+    std::vector<std::pair<unsigned, int>> offsetToCallIndex;
+    for (int i = 0; i < functionCalls.size(); ++i) {
+        if (functionCalls[i].statementStartOffset > 0) {
+            offsetToCallIndex.push_back({functionCalls[i].statementStartOffset, i});
+        }
+    }
+    std::sort(offsetToCallIndex.begin(), offsetToCallIndex.end(),
+              [](const auto& a, const auto& b) { return a.first > b.first; });
+    
+    // Build variable name map for MPI reserved name conflicts
+    std::map<std::string, std::string> variableNameMap;
+    for (const auto& pair : localVariables) {
+        std::string resolvedName = resolveVariableNameConflict(pair.first);
+        variableNameMap[pair.first] = resolvedName;
+    }
+    
+    // Get parallel groups for determining execution strategy
+    auto parallelGroups = getParallelizableGroups();
+    
+    // Build a map from call index to group info
+    std::map<int, std::pair<int, int>> callToGroup; // callIdx -> (groupIdx, positionInGroup)
+    for (int gIdx = 0; gIdx < parallelGroups.size(); ++gIdx) {
+        for (int pos = 0; pos < parallelGroups[gIdx].size(); ++pos) {
+            callToGroup[parallelGroups[gIdx][pos]] = {gIdx, pos};
+        }
+    }
+    
+    // Replace each function call with parallelized version (in reverse order)
+    for (const auto& offsetPair : offsetToCallIndex) {
+        unsigned offset = offsetPair.first;
+        int callIdx = offsetPair.second;
+        const FunctionCall& call = functionCalls[callIdx];
+        
+        // Adjust offset since we removed the opening brace
+        unsigned adjustedOffset = offset - 1;
+        
+        // Find the end of the statement (look for semicolon)
+        size_t stmtEnd = body.find(';', adjustedOffset);
+        if (stmtEnd == std::string::npos) {
+            continue; // Can't find statement end
+        }
+        stmtEnd++; // Include the semicolon
+        
+        // Find the start of the line for proper indentation
+        size_t lineStart = body.rfind('\n', adjustedOffset);
+        if (lineStart == std::string::npos) lineStart = 0;
+        else lineStart++;
+        
+        // Extract indentation
+        std::string indentation;
+        for (size_t i = lineStart; i < adjustedOffset && (body[i] == ' ' || body[i] == '\t'); ++i) {
+            indentation += body[i];
+        }
+        
+        // Check if this function has internal MPI parallelization
+        bool hasMpiParallelization = mpiParallelizedFunctions.count(call.functionName) > 0;
+        
+        // Generate replacement code based on parallelization strategy
+        std::stringstream replacement;
+        
+        if (hasMpiParallelization) {
+            // Function has internal MPI loops - run on ALL ranks
+            if (call.hasReturnValue) {
+                replacement << indentation << "// MPI-parallelized: " << call.functionName << " (all ranks)\n";
+                replacement << indentation << call.fullStatementText;
+            } else {
+                replacement << indentation << "// MPI-parallelized: " << call.functionName << " (all ranks)\n";
+                std::string funcCall = call.callExpression;
+                if (!funcCall.empty() && funcCall.back() != ';') funcCall += ";";
+                replacement << indentation << funcCall;
+            }
+        } else if (call.hasReturnValue) {
+            // No MPI parallelization - execute on rank 0 and broadcast
+            replacement << indentation << "// Parallelized: " << call.functionName << " (rank 0 only)\n";
+            replacement << indentation << call.returnType << " " << call.returnVariable << ";\n";
+            replacement << indentation << "if (rank == 0) {\n";
+            replacement << indentation << "    " << call.returnVariable << " = " << extractFunctionCall(call.callExpression) << ";\n";
+            replacement << indentation << "}\n";
+            // Broadcast result to all ranks
+            std::string mpiType = TypeMapper::getMPIDatatype(call.returnType);
+            if (!mpiType.empty()) {
+                replacement << indentation << "MPI_Bcast(&" << call.returnVariable << ", 1, " << mpiType << ", 0, MPI_COMM_WORLD);";
+            } else {
+                replacement << indentation << "// Note: Cannot broadcast type " << call.returnType;
+            }
+        } else {
+            // Void function without MPI parallelization - wrap in rank check
+            replacement << indentation << "// Parallelized: " << call.functionName << " (rank 0 only)\n";
+            replacement << indentation << "if (rank == 0) {\n";
+            std::string funcCall = call.callExpression;
+            if (!funcCall.empty() && funcCall.back() == ';') funcCall.pop_back();
+            replacement << indentation << "    " << funcCall << ";\n";
+            replacement << indentation << "}";
+        }
+        
+        // Replace the original statement with the parallelized version
+        body.replace(lineStart, stmtEnd - lineStart, replacement.str());
+    }
+    
+    // Wrap output statements (cout, printf) in rank 0 checks
+    // This is done with simple pattern matching
+    std::string wrappedBody;
+    std::istringstream bodyStream(body);
+    std::string line;
+    
+    while (std::getline(bodyStream, line)) {
+        // Check if this line contains output (cout or printf) and is not already in a rank check
+        bool hasOutput = (line.find("std::cout") != std::string::npos || 
+                         line.find("cout <<") != std::string::npos ||
+                         line.find("printf") != std::string::npos);
+        bool alreadyWrapped = (line.find("if (rank == 0)") != std::string::npos ||
+                              line.find("// Parallelized:") != std::string::npos ||
+                              line.find("// MPI-parallelized:") != std::string::npos);
+        
+        // Check if this is a return statement - we'll handle it specially
+        bool isReturn = false;
+        size_t returnPos = line.find("return");
+        if (returnPos != std::string::npos) {
+            // Make sure it's not part of a word (e.g., "returnValue")
+            if (returnPos == 0 || !std::isalnum(line[returnPos - 1])) {
+                size_t afterReturn = returnPos + 6;
+                if (afterReturn >= line.length() || !std::isalnum(line[afterReturn])) {
+                    isReturn = true;
+                }
+            }
+        }
+        
+        if (isReturn) {
+            // Replace return statement with MPI_Finalize + return
+            std::string indent;
+            for (char c : line) {
+                if (c == ' ' || c == '\t') indent += c;
+                else break;
+            }
+            wrappedBody += indent + "MPI_Finalize();\n";
+            wrappedBody += line + "\n";
+        } else if (hasOutput && !alreadyWrapped) {
+            // Wrap output in rank 0 check
+            std::string indent;
+            for (char c : line) {
+                if (c == ' ' || c == '\t') indent += c;
+                else break;
+            }
+            wrappedBody += indent + "if (rank == 0) {\n";
+            wrappedBody += indent + "    " + line.substr(indent.length()) + "\n";
+            wrappedBody += indent + "}\n";
+        } else {
+            wrappedBody += line + "\n";
+        }
+    }
+    
+    // Replace variable names that conflict with MPI reserved names
+    for (const auto& pair : variableNameMap) {
+        if (pair.first != pair.second) {
+            wrappedBody = substituteVariableNames(wrappedBody, variableNameMap);
+            break; // substituteVariableNames handles all at once
+        }
+    }
+    
+    return wrappedBody;
+}
+
 std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
     auto parallelGroups = getParallelizableGroups();
     
@@ -631,6 +827,18 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
     mpiCode << "    MPI_Comm_rank(MPI_COMM_WORLD, &rank);\n";
     mpiCode << "    MPI_Comm_size(MPI_COMM_WORLD, &size);\n\n";
     
+    // Check if we can preserve the original main body structure
+    if (!mainFunctionBody.empty() && !functionCalls.empty() && 
+        functionCalls[0].statementStartOffset > 0) {
+        // NEW: Use preserved main body structure
+        mpiCode << "    // === Original main() structure preserved with MPI parallelization ===\n\n";
+        mpiCode << generatePreservedMainBody();
+        mpiCode << "}\n";
+        
+        return mpiCode.str();
+    }
+    
+    // Fallback: Original reconstruction approach (when offset info not available)
     mpiCode << "    if (rank == 0) {\n";
     mpiCode << "        std::cout << \"=== Enhanced Hybrid MPI/OpenMP Parallelized Program ===\" << std::endl;\n";
     mpiCode << "        std::cout << \"MPI processes: \" << size << std::endl;\n";

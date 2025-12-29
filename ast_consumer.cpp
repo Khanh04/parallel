@@ -56,7 +56,8 @@ void HybridParallelizerConsumer::HandleTranslationUnit(ASTContext &Context) {
                                    globalCollector.globalVariables,
                                    originalIncludes,
                                    enableLoopParallelization,
-                                   typedefCollector.sourceContext);  // NEW: Pass typedef information
+                                   typedefCollector.sourceContext,
+                                   mainExtractor.mainFunctionBody);  // NEW: Pass main body for preservation
     
     // Generate output
     std::string hybridCode = parallelizer.generateHybridMPIOpenMPCode();

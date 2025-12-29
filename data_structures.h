@@ -69,6 +69,13 @@ struct FunctionCall {
     std::string returnType;
     std::vector<std::string> parameterVariables;
     std::set<std::string> usedLocalVariables;
+    
+    // NEW: Source location information for precise text replacement
+    unsigned startColumn;           // Column where statement starts (1-based)
+    unsigned endColumn;             // Column where statement ends (1-based)
+    unsigned statementStartOffset;  // Byte offset from start of main body
+    unsigned statementEndOffset;    // Byte offset from end of statement in main body
+    std::string fullStatementText;  // Complete statement including declaration if any
 };
 
 // NEW: Structure to hold global variable information with types

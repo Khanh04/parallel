@@ -219,7 +219,12 @@ void ComprehensiveLoopAnalyzer::processForLoop(ForStmt *FS) {
         // Determine if MPI parallelizable
         // Must be canonical, not complex, and not have break/continue
         // Also, for now, let's only MPI parallelize if it's an outer loop (depth 1)
-        if (loop.is_canonical && !loop.has_complex_condition && !loop.has_break_continue && loopDepth == 1) {
+        // IMPORTANT: Multiplicative reductions (*) do NOT work correctly with MPI loop splitting
+        // because partial products from different ranks don't combine correctly
+        bool hasMultiplicativeReduction = (loop.reduction_op == "*");
+        
+        if (loop.is_canonical && !loop.has_complex_condition && !loop.has_break_continue && 
+            loopDepth == 1 && !hasMultiplicativeReduction) {
             loop.is_mpi_parallelizable = true;
         }
     }

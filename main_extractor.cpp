@@ -12,7 +12,8 @@ static std::string normalizeTypeName(const std::string& type) {
 }
 
 MainFunctionExtractor::MainFunctionExtractor(SourceManager *sourceManager) 
-    : SM(sourceManager), functionAnalysisPtr(nullptr), variableDeclarationCounter(0) {}
+    : SM(sourceManager), functionAnalysisPtr(nullptr), variableDeclarationCounter(0),
+      mainBodyStartLine(0), mainBodyStartColumn(0) {}
 
 void MainFunctionExtractor::setFunctionAnalysis(std::map<std::string, FunctionAnalysis>* analysis) {
     functionAnalysisPtr = analysis;
@@ -22,6 +23,11 @@ bool MainFunctionExtractor::VisitFunctionDecl(FunctionDecl *FD) {
     if (FD->getNameAsString() == "main" && FD->hasBody()) {
         CompoundStmt *body = dyn_cast<CompoundStmt>(FD->getBody());
         if (body) {
+            // NEW: Capture main body start location for offset calculations
+            mainBodyStartLoc = body->getLBracLoc();
+            mainBodyStartLine = SM->getSpellingLineNumber(mainBodyStartLoc);
+            mainBodyStartColumn = SM->getSpellingColumnNumber(mainBodyStartLoc);
+            
             collectLocalVariables(body);
             
             for (auto *stmt : body->body()) {
@@ -152,6 +158,21 @@ void MainFunctionExtractor::processStatement(Stmt *stmt) {
                                 call.hasReturnValue = true;
                                 call.returnVariable = VD->getNameAsString();
                                 
+                                // NEW: Capture source location for text replacement
+                                call.startColumn = SM->getSpellingColumnNumber(DS->getBeginLoc());
+                                call.endColumn = SM->getSpellingColumnNumber(DS->getEndLoc());
+                                call.fullStatementText = getSourceText(DS->getSourceRange());
+                                
+                                // Calculate byte offset from main body start
+                                if (mainBodyStartLoc.isValid()) {
+                                    unsigned stmtFileOffset = SM->getFileOffset(DS->getBeginLoc());
+                                    unsigned bodyFileOffset = SM->getFileOffset(mainBodyStartLoc);
+                                    call.statementStartOffset = stmtFileOffset - bodyFileOffset;
+                                    
+                                    unsigned stmtEndOffset = SM->getFileOffset(DS->getEndLoc());
+                                    call.statementEndOffset = stmtEndOffset - bodyFileOffset;
+                                }
+                                
                                 if (functionAnalysisPtr && functionAnalysisPtr->count(funcName)) {
                                     call.returnType = (*functionAnalysisPtr)[funcName].returnType;
                                 } else {
@@ -188,6 +209,21 @@ void MainFunctionExtractor::processStatement(Stmt *stmt) {
                 call.callExpression = getSourceText(CE->getSourceRange());
                 call.lineNumber = SM->getSpellingLineNumber(CE->getBeginLoc());
                 call.hasReturnValue = !CE->getType()->isVoidType();
+                
+                // NEW: Capture source location for text replacement
+                call.startColumn = SM->getSpellingColumnNumber(CE->getBeginLoc());
+                call.endColumn = SM->getSpellingColumnNumber(CE->getEndLoc());
+                call.fullStatementText = getSourceText(CE->getSourceRange());
+                
+                // Calculate byte offset from main body start
+                if (mainBodyStartLoc.isValid()) {
+                    unsigned stmtFileOffset = SM->getFileOffset(CE->getBeginLoc());
+                    unsigned bodyFileOffset = SM->getFileOffset(mainBodyStartLoc);
+                    call.statementStartOffset = stmtFileOffset - bodyFileOffset;
+                    
+                    unsigned stmtEndOffset = SM->getFileOffset(CE->getEndLoc());
+                    call.statementEndOffset = stmtEndOffset - bodyFileOffset;
+                }
                 
                 if (call.hasReturnValue) {
                     if (functionAnalysisPtr && functionAnalysisPtr->count(funcName)) {
@@ -276,6 +312,10 @@ bool MainFunctionExtractor::isUserFunction(const std::string& funcName) {
         "now", "count", "size", "begin", "end", "data", "empty", "clear",
         "push_back", "pop_back", "insert", "erase", "find", "reserve", "resize",
         "at", "front", "back", "emplace", "emplace_back", "shrink_to_fit",
+        
+        // chrono functions
+        "duration_cast", "time_point_cast", "high_resolution_clock", "steady_clock",
+        "system_clock", "duration", "time_point",
         
         // Compiler intrinsics and operators
         "operator", "__builtin", "__sync", "__atomic"

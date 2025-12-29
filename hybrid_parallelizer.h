@@ -19,6 +19,7 @@ private:
     bool enableLoopParallelization;
     std::string originalIncludes;
     SourceCodeContext sourceContext;  // NEW: Complete source context including typedefs
+    std::string mainFunctionBody;     // NEW: Original main() body for preservation
     
     // Type mapping functions moved to TypeMapper utility class
     bool isTypePrintable(const std::string& cppType);
@@ -27,6 +28,7 @@ private:
     std::string resolveVariableNameConflict(const std::string& originalName) const;
     std::string substituteVariableNames(const std::string& originalCall, const std::map<std::string, std::string>& variableNameMap) const;
     std::string extractIncludesOnly(const std::string& source);  // PHASE 2: Extract only include statements
+    std::string generatePreservedMainBody();  // NEW: Generate main body preserving original structure
     
 public:
     HybridParallelizer(const std::vector<FunctionCall>& calls, 
@@ -37,7 +39,8 @@ public:
                       const std::set<std::string>& globals,
                       const std::string& includes = "",
                       bool enableLoops = true,
-                      const SourceCodeContext& context = SourceCodeContext());  // NEW: Add source context
+                      const SourceCodeContext& context = SourceCodeContext(),
+                      const std::string& mainBody = "");  // NEW: Add main body parameter
     
     void buildDependencyGraph();
     std::vector<std::vector<int>> getParallelizableGroups() const;
