@@ -212,6 +212,32 @@ std::string HybridParallelizer::extractIncludesOnly(const std::string& source) {
     return result.str();
 }
 
+// Helper to find matching brace
+static size_t findMatchingBrace(const std::string& str, size_t startPos) {
+    int depth = 0;
+    for (size_t i = startPos; i < str.length(); ++i) {
+        if (str[i] == '{') depth++;
+        else if (str[i] == '}') {
+            depth--;
+            if (depth == 0) return i;
+        }
+    }
+    return std::string::npos;
+}
+
+static std::string getMPIOp(const std::string& op) {
+    if (op == "+") return "MPI_SUM";
+    if (op == "*") return "MPI_PROD";
+    if (op == "min") return "MPI_MIN";
+    if (op == "max") return "MPI_MAX";
+    if (op == "&") return "MPI_BAND";
+    if (op == "|") return "MPI_BOR";
+    if (op == "^") return "MPI_BXOR";
+    if (op == "&&") return "MPI_LAND";
+    if (op == "||") return "MPI_LOR";
+    return "MPI_SUM"; // Default
+}
+
 std::string HybridParallelizer::generateParallelizedFunctionBody(const FunctionInfo& info) {
     std::string parallelizedBody = info.original_body;
     
@@ -247,10 +273,34 @@ std::string HybridParallelizer::generateParallelizedFunctionBody(const FunctionI
     
     if (needsThreadSeed) {
         // Insert thread-local seed declaration after opening brace
+        // Use static thread_local to ensure proper per-thread initialization
         size_t bracePos = parallelizedBody.find('{');
         if (bracePos != std::string::npos) {
-            std::string seedDecl = "\n    unsigned int __thread_seed = (unsigned int)time(NULL) ^ omp_get_thread_num();";
+            // Use thread_local with lazy initialization inside the parallel region
+            // The seed will be initialized properly when first accessed by each thread
+            std::string seedDecl = "\n    static thread_local unsigned int __thread_seed = 0;\n"
+                                   "    static thread_local bool __seed_initialized = false;";
             parallelizedBody.insert(bracePos + 1, seedDecl);
+            
+            // Add initialization inside each parallel loop
+            // Find all #pragma omp parallel for and add seed init after loop start
+            size_t pragmaPos = 0;
+            while ((pragmaPos = parallelizedBody.find("#pragma omp parallel for", pragmaPos)) != std::string::npos) {
+                // Find the loop body's opening brace
+                size_t forPos = parallelizedBody.find("for", pragmaPos + 24);
+                if (forPos != std::string::npos) {
+                    size_t loopBrace = parallelizedBody.find('{', forPos);
+                    if (loopBrace != std::string::npos) {
+                        std::string seedInit = "\n        if (!__seed_initialized) { __thread_seed = (unsigned int)time(NULL) ^ omp_get_thread_num(); __seed_initialized = true; }";
+                        parallelizedBody.insert(loopBrace + 1, seedInit);
+                        pragmaPos = loopBrace + seedInit.length() + 1;
+                    } else {
+                        pragmaPos += 24;
+                    }
+                } else {
+                    pragmaPos += 24;
+                }
+            }
         }
     }
     
@@ -298,6 +348,85 @@ std::string HybridParallelizer::generateParallelizedFunctionBody(const FunctionI
         if (lineStart == std::string::npos) lineStart = 0;
         else lineStart++;
         
+        // NEW: MPI Loop Parallelization
+        if (loop.is_mpi_parallelizable) {
+             size_t bodyStart = parallelizedBody.find('{', loopPos);
+             if (bodyStart != std::string::npos) {
+                 size_t loopEnd = findMatchingBrace(parallelizedBody, bodyStart);
+                 if (loopEnd != std::string::npos) {
+                     std::string existingBody = parallelizedBody.substr(bodyStart, loopEnd - bodyStart + 1);
+                     
+                     std::stringstream mpiCode;
+                     mpiCode << "{\n";
+                     mpiCode << "    // Hybrid MPI+OpenMP Parallel Loop\n";
+                     mpiCode << "    int _mpi_rank, _mpi_size;\n";
+                     mpiCode << "    MPI_Comm_rank(MPI_COMM_WORLD, &_mpi_rank);\n";
+                     mpiCode << "    MPI_Comm_size(MPI_COMM_WORLD, &_mpi_size);\n";
+                     
+                     mpiCode << "    long _loop_start = " << loop.start_expr << ";\n";
+                     mpiCode << "    long _loop_end = " << loop.end_expr << ";\n";
+                     mpiCode << "    long _loop_step = " << loop.step_expr << ";\n";
+                     // Handle both positive and negative step loops
+                     mpiCode << "    bool _is_negative_step = (_loop_step < 0);\n";
+                     mpiCode << "    long _abs_step = _is_negative_step ? -_loop_step : _loop_step;\n";
+                     mpiCode << "    long _total_iters = _is_negative_step ? (_loop_start - _loop_end) / _abs_step : (_loop_end - _loop_start) / _loop_step;\n";
+                     mpiCode << "    long _chunk_size = _total_iters / _mpi_size;\n";
+                     mpiCode << "    long _remainder = _total_iters % _mpi_size;\n";
+                     mpiCode << "    long _my_start_iter = _mpi_rank * _chunk_size + (_mpi_rank < _remainder ? _mpi_rank : _remainder);\n";
+                     mpiCode << "    long _my_count = _chunk_size + (_mpi_rank < _remainder ? 1 : 0);\n";
+                     mpiCode << "    long _my_start = _loop_start + _my_start_iter * _loop_step;\n";
+                     mpiCode << "    long _my_end = _my_start + _my_count * _loop_step;\n";
+                     
+                     // Generate two separate loops for positive/negative step (OpenMP doesn't allow ternary in loop condition)
+                     mpiCode << "    if (_is_negative_step) {\n";
+                     mpiCode << "        " << loop.pragma_text << "\n";
+                     mpiCode << "        for (";
+                     if (!loop.loop_variable_type.empty()) {
+                         mpiCode << loop.loop_variable_type << " ";
+                     }
+                     mpiCode << loop.loop_variable << " = _my_start; "
+                             << loop.loop_variable << " > _my_end; "
+                             << loop.loop_variable << " += " << loop.step_expr << ") ";
+                     mpiCode << existingBody << "\n";
+                     mpiCode << "    } else {\n";
+                     mpiCode << "        " << loop.pragma_text << "\n";
+                     mpiCode << "        for (";
+                     if (!loop.loop_variable_type.empty()) {
+                         mpiCode << loop.loop_variable_type << " ";
+                     }
+                     mpiCode << loop.loop_variable << " = _my_start; "
+                             << loop.loop_variable << " < _my_end; "
+                             << loop.loop_variable << " += " << loop.step_expr << ") ";
+                     mpiCode << existingBody << "\n";
+                     mpiCode << "    }\n";
+                     
+                     for (const auto& var : loop.reduction_vars) {
+                         std::string varType = "double"; // Default
+                         if (localVariables.count(var)) {
+                             varType = localVariables.at(var).type;
+                         }
+                         
+                         std::string mpiType = TypeMapper::getMPIDatatype(varType);
+                         if (mpiType.empty()) mpiType = "MPI_DOUBLE"; // Fallback
+                         
+                         std::string mpiOp = getMPIOp(loop.reduction_op);
+                         
+                         // Use separate local/global buffers to avoid double-counting with MPI_IN_PLACE
+                         mpiCode << "    " << varType << " _local_" << var << " = " << var << ";\n";
+                         mpiCode << "    " << varType << " _global_" << var << ";\n";
+                         mpiCode << "    MPI_Allreduce(&_local_" << var << ", &_global_" << var << ", 1, " 
+                                 << mpiType << ", " << mpiOp << ", MPI_COMM_WORLD);\n";
+                         mpiCode << "    " << var << " = _global_" << var << ";\n";
+                     }
+                     
+                     mpiCode << "    }\n";
+                     
+                     parallelizedBody.replace(loopPos, loopEnd - loopPos + 1, mpiCode.str());
+                     continue; 
+                 }
+             }
+        }
+
         // Look for existing pragma in the 5 lines before the loop
         size_t searchStart = lineStart > 200 ? lineStart - 200 : 0;
         std::string beforeLoop = parallelizedBody.substr(searchStart, loopPos - searchStart);
@@ -595,6 +724,58 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
     // Generate parallel execution logic
     int groupIndex = 0;
     for (const auto& group : parallelGroups) {
+        // NEW: Check for MPI loops in this group
+        bool hasMpiLoops = false;
+        if (enableLoopParallelization) {
+            for (int callIdx : group) {
+                std::string funcName = functionCalls[callIdx].functionName;
+                if (functionInfo.count(funcName)) {
+                    const auto& info = functionInfo.at(funcName);
+                    for (const auto& loop : info.loops) {
+                        if (loop.is_mpi_parallelizable) {
+                            hasMpiLoops = true;
+                            break;
+                        }
+                    }
+                }
+                if (hasMpiLoops) break;
+            }
+        }
+
+        if (hasMpiLoops) {
+            mpiCode << "    // === Parallel group " << groupIndex << " (Contains MPI-parallelized loops) ===\n";
+            mpiCode << "    // Executing functions sequentially on all ranks to allow full MPI utilization\n";
+            
+            for (int callIdx : group) {
+                std::string funcName = functionCalls[callIdx].functionName;
+                mpiCode << "    // Call " << funcName << "\n";
+                
+                if (functionCalls[callIdx].hasReturnValue) {
+                    std::string originalCall = functionCalls[callIdx].callExpression;
+                    std::string substitutedCall = substituteVariableNames(originalCall, variableNameMap);
+                    mpiCode << "    result_" << callIdx << " = " << extractFunctionCall(substitutedCall) << ";\n";
+                    
+                    if (!functionCalls[callIdx].returnVariable.empty()) {
+                        std::string resolvedReturnVar = resolveVariableNameConflict(functionCalls[callIdx].returnVariable);
+                        mpiCode << "    " << resolvedReturnVar << " = result_" << callIdx << ";\n";
+                    }
+                } else {
+                    std::string originalCall = functionCalls[callIdx].callExpression;
+                    std::string substitutedCall = substituteVariableNames(originalCall, variableNameMap);
+                    if (!substitutedCall.empty() && substitutedCall.back() == ';') {
+                        substitutedCall.pop_back();
+                    }
+                    mpiCode << "    " << substitutedCall << ";\n";
+                }
+                
+                // Add barrier to synchronize
+                mpiCode << "    MPI_Barrier(MPI_COMM_WORLD);\n";
+            }
+            
+            groupIndex++;
+            continue;
+        }
+
         mpiCode << "    // === Parallel group " << groupIndex << " ===\n";
         mpiCode << "    if (rank == 0) {\n";
         mpiCode << "        std::cout << \"\\n--- Executing Group " << groupIndex << " ---\" << std::endl;\n";
@@ -643,12 +824,14 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
                     std::string funcCall = extractFunctionCall(substitutedCall);
                     mpiCode << "        result_" << callIdx << " = " << funcCall << ";\n";
                     
-                    // Send result to rank 0 if this process is not rank 0
+                    // Send result to rank 0 if this process is not rank 0 (non-blocking to avoid deadlock)
                     mpiCode << "        if (assigned_rank_" << callIdx << " != 0) {\n";
                     std::string mpiType = TypeMapper::getMPIDatatype(functionCalls[callIdx].returnType);
                     if (!mpiType.empty()) {
-                        mpiCode << "            MPI_Send(&result_" << callIdx 
-                               << ", 1, " << mpiType << ", 0, " << callIdx << ", MPI_COMM_WORLD);\n";
+                        mpiCode << "            MPI_Request _send_req_" << callIdx << ";\n";
+                        mpiCode << "            MPI_Isend(&result_" << callIdx 
+                               << ", 1, " << mpiType << ", 0, " << callIdx << ", MPI_COMM_WORLD, &_send_req_" << callIdx << ");\n";
+                        mpiCode << "            MPI_Wait(&_send_req_" << callIdx << ", MPI_STATUS_IGNORE);\n";
                     } else {
                         mpiCode << "            // Skipping MPI_Send for unsupported type: " << functionCalls[callIdx].returnType << "\n";
                     }
@@ -666,6 +849,8 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
             
             // Collect results in rank 0 using dynamic assignment
             mpiCode << "    if (rank == 0) {\n";
+            // Use non-blocking receives to avoid deadlock
+            mpiCode << "        std::vector<MPI_Request> _recv_requests;\n";
             for (int i = 0; i < group.size(); ++i) {
                 int callIdx = group[i];
                 if (functionCalls[callIdx].hasReturnValue) {
@@ -673,15 +858,21 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
                     if (!mpiType.empty()) {
                         // Only receive if function is assigned to a different rank
                         mpiCode << "        if (assigned_rank_" << callIdx << " != 0) {\n";
-                        mpiCode << "            MPI_Recv(&result_" << callIdx 
+                        mpiCode << "            MPI_Request _recv_req_" << callIdx << ";\n";
+                        mpiCode << "            MPI_Irecv(&result_" << callIdx 
                                << ", 1, " << mpiType << ", assigned_rank_" << callIdx << ", " << callIdx 
-                               << ", MPI_COMM_WORLD, MPI_STATUS_IGNORE);\n";
+                               << ", MPI_COMM_WORLD, &_recv_req_" << callIdx << ");\n";
+                        mpiCode << "            _recv_requests.push_back(_recv_req_" << callIdx << ");\n";
                         mpiCode << "        }\n";
                     } else {
                         mpiCode << "        // Skipping MPI_Recv for unsupported type: " << functionCalls[callIdx].returnType << "\n";
                     }
                 }
             }
+            // Wait for all receives to complete
+            mpiCode << "        if (!_recv_requests.empty()) {\n";
+            mpiCode << "            MPI_Waitall(_recv_requests.size(), _recv_requests.data(), MPI_STATUSES_IGNORE);\n";
+            mpiCode << "        }\n";
             
             for (int i = 0; i < group.size(); ++i) {
                 int callIdx = group[i];
@@ -776,36 +967,12 @@ std::string HybridParallelizer::generateHybridMPIOpenMPCode() {
         }
     }
     
-    // Print variable results (avoiding duplicates)
-    std::set<std::string> printedVars;
-    
-    for (const auto& pair : localVariables) {
-        const LocalVariable& localVar = pair.second;
-        if (localVar.definedAtCall >= 0 && printedVars.find(localVar.name) == printedVars.end() && isTypePrintable(localVar.type)) {
-            std::string resolvedName = resolveVariableNameConflict(localVar.name);
-            mpiCode << "        std::cout << \"" << localVar.name << " = \" << " << resolvedName << " << std::endl;\n";
-            printedVars.insert(localVar.name);
-        }
-    }
-    
-    // Print function call results (avoiding duplicates)
-    for (int i = 0; i < functionCalls.size(); ++i) {
-        if (functionCalls[i].hasReturnValue) {
-            std::string varName = functionCalls[i].returnVariable;
-            if (!varName.empty() && printedVars.find(varName) == printedVars.end() && isTypePrintable(functionCalls[i].returnType)) {
-                std::string resolvedVarName = resolveVariableNameConflict(varName);
-                mpiCode << "        std::cout << \"" << varName << " = \" << " << resolvedVarName << " << std::endl;\n";
-                printedVars.insert(varName);
-            } else if (varName.empty()) {
-                mpiCode << "        std::cout << \"" << functionCalls[i].functionName 
-                       << " result: \" << result_" << i << " << std::endl;\n";
-            }
-        }
-    }
+    // NOTE: Variable result printing removed to avoid issues with non-printable types
+    // Users can add their own output statements as needed
     
     mpiCode << "        std::cout << \"\\n=== Enhanced Hybrid MPI/OpenMP Execution Complete ===\" << std::endl;\n";
     mpiCode << "    }\n\n";
-    
+
     mpiCode << "    MPI_Finalize();\n";
     mpiCode << "    return 0;\n";
     mpiCode << "}\n";

@@ -11,6 +11,7 @@ struct LoopInfo {
     std::string type;                    // "for", "while", "do-while"
     std::string source_code;             // Original loop source
     std::string loop_variable;           // Loop iterator variable
+    std::string loop_variable_type;      // NEW: Type of loop variable (e.g., "int")
     std::vector<std::string> read_vars;  // Variables read in loop
     std::vector<std::string> write_vars; // Variables written in loop
     std::vector<std::string> reduction_vars; // Reduction variables
@@ -31,6 +32,13 @@ struct LoopInfo {
     unsigned start_col, end_col;         // Column positions
     std::string function_name;           // Function containing this loop
     std::string pragma_text;             // Generated OpenMP pragma
+    
+    // NEW: Fields for MPI loop parallelization
+    std::string start_expr;              // Loop start expression (e.g., "0")
+    std::string end_expr;                // Loop end expression (e.g., "N")
+    std::string step_expr;               // Loop step expression (e.g., "1")
+    bool is_mpi_parallelizable;          // Can be parallelized with MPI
+    bool is_canonical;                   // Is in canonical form (for(i=start; i<end; i+=step))
 };
 
 // Structure to hold function information with loops
@@ -61,6 +69,15 @@ struct FunctionCall {
     std::string returnType;
     std::vector<std::string> parameterVariables;
     std::set<std::string> usedLocalVariables;
+};
+
+// NEW: Structure to hold global variable information with types
+struct GlobalVariable {
+    std::string name;
+    std::string type;
+    std::string defaultValue;
+    bool isArray;
+    std::string arraySize;
 };
 
 // Structure to hold local variable information

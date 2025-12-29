@@ -1,8 +1,15 @@
 #include "main_extractor.h"
+#include "type_mapping.h"
 #include "clang/Lex/Lexer.h"
 #include <set>
 
 using namespace clang;
+
+// Normalize C types to C++ equivalents
+static std::string normalizeTypeName(const std::string& type) {
+    if (type == "_Bool") return "bool";
+    return type;
+}
 
 MainFunctionExtractor::MainFunctionExtractor(SourceManager *sourceManager) 
     : SM(sourceManager), functionAnalysisPtr(nullptr), variableDeclarationCounter(0) {}
@@ -50,7 +57,7 @@ void MainFunctionExtractor::collectLocalVariablesInStmt(Stmt *stmt) {
             if (VarDecl *VD = dyn_cast<VarDecl>(D)) {
                 LocalVariable localVar;
                 localVar.name = VD->getNameAsString();
-                localVar.type = VD->getType().getAsString();
+                localVar.type = normalizeTypeName(VD->getType().getAsString());
                 localVar.declarationOrder = variableDeclarationCounter++;
                 localVar.definedAtCall = -1;
                 localVar.isParameter = false;
@@ -131,7 +138,9 @@ void MainFunctionExtractor::processStatement(Stmt *stmt) {
         for (auto *D : DS->decls()) {
             if (VarDecl *VD = dyn_cast<VarDecl>(D)) {
                 if (VD->hasInit()) {
-                    if (CallExpr *CE = dyn_cast<CallExpr>(VD->getInit())) {
+                    // Strip implicit casts to find the actual CallExpr
+                    Expr *init = VD->getInit()->IgnoreImplicit();
+                    if (CallExpr *CE = dyn_cast<CallExpr>(init)) {
                         if (FunctionDecl *FD = CE->getDirectCallee()) {
                             std::string funcName = FD->getNameAsString();
                             

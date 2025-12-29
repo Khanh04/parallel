@@ -9,10 +9,11 @@
 #include <set>
 #include <string>
 
-// Collects global variable declarations
+// Collects global variable declarations with type information
 class GlobalVariableCollector : public clang::RecursiveASTVisitor<GlobalVariableCollector> {
 public:
-    std::set<std::string> globalVariables;
+    std::set<std::string> globalVariables;  // Keep for backward compatibility
+    std::map<std::string, GlobalVariable> globalVariableInfo;  // NEW: With type info
     
     bool VisitVarDecl(clang::VarDecl *VD);
 };

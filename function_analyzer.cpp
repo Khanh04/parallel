@@ -9,7 +9,35 @@ bool GlobalVariableCollector::VisitVarDecl(VarDecl *VD) {
     if (VD->hasGlobalStorage() && !VD->isStaticLocal()) {
         SourceManager &SM = VD->getASTContext().getSourceManager();
         if (SM.isInMainFile(VD->getLocation())) {
-            globalVariables.insert(VD->getNameAsString());
+            std::string varName = VD->getNameAsString();
+            globalVariables.insert(varName);
+            
+            // Capture type information
+            GlobalVariable gv;
+            gv.name = varName;
+            gv.type = VD->getType().getAsString();
+            
+            // Normalize C types to C++ types
+            if (gv.type == "_Bool") gv.type = "bool";
+            
+            // Check for arrays
+            gv.isArray = VD->getType()->isArrayType();
+            if (gv.isArray) {
+                if (auto CAT = dyn_cast<ConstantArrayType>(VD->getType().getTypePtr())) {
+                    gv.arraySize = std::to_string(CAT->getSize().getZExtValue());
+                }
+            }
+            
+            // Determine default value based on type
+            if (gv.type.find("double") != std::string::npos || gv.type.find("float") != std::string::npos) {
+                gv.defaultValue = "0.0";
+            } else if (gv.type == "bool") {
+                gv.defaultValue = "false";
+            } else {
+                gv.defaultValue = "0";
+            }
+            
+            globalVariableInfo[varName] = gv;
         }
     }
     return true;

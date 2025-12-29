@@ -72,7 +72,7 @@ std::string TypeMapper::getDefaultValue(const std::string& cppType) {
     }
     
     // Special handling for STL types
-    if (normalizedType.find("std::") != std::string::npos) {
+    if (normalizedType.find("std::") != std::string::npos || normalizedType.find("vector") != std::string::npos) {
         if (normalizedType.find("std::chrono") != std::string::npos) {
             return "std::chrono::system_clock::time_point{}";
         }

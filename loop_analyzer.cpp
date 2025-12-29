@@ -99,16 +99,73 @@ void ComprehensiveLoopAnalyzer::processForLoop(ForStmt *FS) {
     // Extract source code
     loop.source_code = getSourceText(FS->getSourceRange());
     
-    // Extract loop variable from init statement
+    // Initialize new fields
+    loop.is_canonical = false;
+    loop.is_mpi_parallelizable = false;
+    loop.start_expr = "";
+    loop.end_expr = "";
+    loop.step_expr = "1"; // Default step
+
+    // Extract loop variable and start expression from init statement
     if (Stmt *Init = FS->getInit()) {
         if (DeclStmt *DS = dyn_cast<DeclStmt>(Init)) {
             for (auto *D : DS->decls()) {
                 if (VarDecl *VD = dyn_cast<VarDecl>(D)) {
                     loop.loop_variable = VD->getNameAsString();
+                    loop.loop_variable_type = VD->getType().getAsString();
+                    // Normalize C types to C++ types
+                    if (loop.loop_variable_type == "_Bool") loop.loop_variable_type = "bool";
+                    if (VD->hasInit()) {
+                        loop.start_expr = getSourceText(VD->getInit()->getSourceRange());
+                    }
                     break;
                 }
             }
+        } else if (BinaryOperator *BO = dyn_cast<BinaryOperator>(Init)) {
+            if (BO->getOpcode() == BO_Assign) {
+                if (DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(BO->getLHS())) {
+                    loop.loop_variable = DRE->getNameInfo().getName().getAsString();
+                    loop.start_expr = getSourceText(BO->getRHS()->getSourceRange());
+                    // Get type from the referenced variable declaration
+                    if (VarDecl *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
+                        loop.loop_variable_type = VD->getType().getAsString();
+                        // Normalize C types to C++ types
+                        if (loop.loop_variable_type == "_Bool") loop.loop_variable_type = "bool";
+                    }
+                }
+            }
         }
+    }
+
+    // Extract end expression from condition
+    if (Expr *Cond = FS->getCond()) {
+        if (BinaryOperator *BO = dyn_cast<BinaryOperator>(Cond)) {
+            // Check if LHS is loop variable
+            std::string lhs = getSourceText(BO->getLHS()->getSourceRange());
+            // Simple check if LHS contains loop variable
+            if (lhs.find(loop.loop_variable) != std::string::npos) {
+                loop.end_expr = getSourceText(BO->getRHS()->getSourceRange());
+            }
+        }
+    }
+
+    // Extract step expression from increment
+    if (Expr *Inc = FS->getInc()) {
+        if (UnaryOperator *UO = dyn_cast<UnaryOperator>(Inc)) {
+            if (UO->isIncrementOp()) loop.step_expr = "1";
+            else if (UO->isDecrementOp()) loop.step_expr = "-1";
+        } else if (BinaryOperator *BO = dyn_cast<BinaryOperator>(Inc)) {
+            if (BO->getOpcode() == BO_AddAssign) {
+                loop.step_expr = getSourceText(BO->getRHS()->getSourceRange());
+            } else if (BO->getOpcode() == BO_SubAssign) {
+                loop.step_expr = "-" + getSourceText(BO->getRHS()->getSourceRange());
+            }
+        }
+    }
+
+    // Determine if canonical
+    if (!loop.loop_variable.empty() && !loop.start_expr.empty() && !loop.end_expr.empty()) {
+        loop.is_canonical = true;
     }
     
     // PHASE 2 FIX: More precise complex condition detection
@@ -158,6 +215,13 @@ void ComprehensiveLoopAnalyzer::processForLoop(ForStmt *FS) {
     // Generate OpenMP pragma
     if (loop.parallelizable) {
         loop.pragma_text = generateOpenMPPragma(loop);
+        
+        // Determine if MPI parallelizable
+        // Must be canonical, not complex, and not have break/continue
+        // Also, for now, let's only MPI parallelize if it's an outer loop (depth 1)
+        if (loop.is_canonical && !loop.has_complex_condition && !loop.has_break_continue && loopDepth == 1) {
+            loop.is_mpi_parallelizable = true;
+        }
     }
     
     functionLoops[currentFunction].push_back(loop);
@@ -268,7 +332,12 @@ void ComprehensiveLoopAnalyzer::analyzeLoopBody(Stmt *body, LoopInfo &loop) {
                     // Determine reduction operation
                     switch (CAO->getOpcode()) {
                         case BO_AddAssign: loop->reduction_op = "+"; break;
-                        case BO_SubAssign: loop->reduction_op = "-"; break;
+                        case BO_SubAssign: 
+                loop->reduction_op = "-"; 
+                // Subtraction is NOT associative - cannot be parallelized
+                loop->parallelizable = false;
+                loop->analysis_notes += " Subtraction reduction is not parallelizable (non-associative). ";
+                break;
                         case BO_MulAssign: loop->reduction_op = "*"; break;
                         case BO_AndAssign: loop->reduction_op = "&"; break;
                         case BO_OrAssign: loop->reduction_op = "|"; break;
@@ -431,8 +500,14 @@ void ComprehensiveLoopAnalyzer::performDependencyAnalysis(LoopInfo &loop, const 
         }
         
         if (!loop.reduction_vars.empty()) {
-            loop.parallelizable = true;
-            loop.analysis_notes += "Contains reduction operations - parallelizable with reduction clause. ";
+            // Subtraction is NOT associative - cannot be parallelized with reduction
+            if (loop.reduction_op != "-") {
+                loop.parallelizable = true;
+                loop.analysis_notes += "Contains reduction operations - parallelizable with reduction clause. ";
+            } else {
+                loop.parallelizable = false;
+                loop.analysis_notes += "Contains subtraction reduction - not parallelizable (non-associative). ";
+            }
         }
         
         if (loop.has_dependencies && loop.reduction_vars.empty()) {
